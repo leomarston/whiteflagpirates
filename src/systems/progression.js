@@ -41,6 +41,7 @@ const REP_LABELS = [
 export class Progression {
   constructor(ctx) {
     this.ctx = ctx;
+    this.SKILLS = SKILLS; // exposed for the UI via ctx.progression
     this._hunterTimer = 240;
     this._hunterLive = false;
 
