@@ -1,0 +1,278 @@
+// Naval combat: cannonballs, broadsides, damage, player gunnery, boarding offers.
+import * as THREE from 'three';
+import { COMBAT } from '../core/constants.js';
+import { clamp, wrapAngle } from '../core/utils.js';
+
+const MAX_BALLS = 48;
+const _v = new THREE.Vector3();
+const _local = new THREE.Vector3();
+const _dir = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+const _q = new THREE.Quaternion();
+const _s = new THREE.Vector3(1, 1, 1);
+
+const AMMO = {
+  round: { dmg: COMBAT.ROUNDSHOT_DMG, speed: COMBAT.BALL_SPEED, label: 'Round shot' },
+  chain: { dmg: COMBAT.CHAINSHOT_DMG, speed: COMBAT.BALL_SPEED * 0.85, label: 'Chain shot' },
+  grape: { dmg: COMBAT.GRAPESHOT_DMG, speed: COMBAT.BALL_SPEED * 0.7, label: 'Grape shot' },
+};
+
+export class NavalCombat {
+  constructor(ctx) {
+    this.ctx = ctx;
+    this.playerAmmo = 'round';
+
+    this.balls = [];
+    for (let i = 0; i < MAX_BALLS; i++) {
+      this.balls.push({
+        alive: false, p: new THREE.Vector3(), v: new THREE.Vector3(),
+        type: 'round', firedBy: null, isPlayer: false, life: 0,
+      });
+    }
+    this.ballMesh = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.17, 6, 6),
+      new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.4, metalness: 0.5 }),
+      MAX_BALLS,
+    );
+    this.ballMesh.count = 0;
+    this.ballMesh.frustumCulled = false;
+    ctx.scene.add(this.ballMesh);
+
+    this._pending = [];   // staggered per-cannon shots
+    this._chainSlow = new Map(); // ship -> timer
+    this._offered = new WeakSet();
+
+    ctx.events?.on('boarding:resolve', ({ victory, ship }) => {
+      if (victory && ship?.alive && !ship.sinking) {
+        ship._lastHitByPlayer = true;
+        ship.sink(true);
+      }
+    });
+  }
+
+  reloadTimeFor(ship) {
+    let t = COMBAT.RELOAD_TIME;
+    if (ship.isPlayer) {
+      t /= this.ctx.progression?.getMod?.('reloadSpeed') ?? 1;
+      t /= this.ctx.crew?.reloadBonus?.() ?? 1;
+    } else {
+      t *= 1.25;
+    }
+    return t;
+  }
+
+  /** Returns true if the broadside fired. */
+  fireBroadside(ship, side, { type = 'round', spreadRad = 0.035, targetPoint = null } = {}) {
+    if (!ship?.alive || ship.sinking) return false;
+    const reloadKey = side === 'L' ? 'reloadL' : 'reloadR';
+    if (ship[reloadKey] > 0) return false;
+    ship[reloadKey] = this.reloadTimeFor(ship);
+
+    const parts = ship.group.userData.parts;
+    const points = side === 'L' ? parts.firePointsL : parts.firePointsR;
+    for (let i = 0; i < points.length; i++) {
+      this._pending.push({
+        ship, side, type, targetPoint: targetPoint ? targetPoint.clone() : null,
+        local: points[i], delay: i * (0.12 + Math.random() * 0.1), spreadRad,
+        isPlayer: ship.isPlayer,
+      });
+    }
+    return true;
+  }
+
+  _fireOne(job) {
+    const { ship, side, type, targetPoint, local, spreadRad } = job;
+    if (!ship.alive || ship.sinking) return;
+    const ammo = AMMO[type] ?? AMMO.round;
+
+    _v.copy(local).applyMatrix4(ship.group.matrixWorld);
+
+    // base direction: abeam of the ship
+    const heading = ship.physics.heading;
+    const sideSign = side === 'L' ? -1 : 1;
+    _dir.set(Math.cos(heading) * sideSign, 0, -Math.sin(heading) * sideSign);
+
+    // elevation: solve roughly for target range, else default arc
+    let elev = 0.045;
+    if (targetPoint) {
+      const range = Math.hypot(targetPoint.x - _v.x, targetPoint.z - _v.z);
+      const s2 = clamp((range * COMBAT.BALL_GRAVITY) / (ammo.speed * ammo.speed), 0, 0.95);
+      elev = 0.5 * Math.asin(s2);
+    }
+    _dir.y = Math.tan(elev);
+    _dir.normalize();
+
+    // spread
+    _dir.x += (Math.random() - 0.5) * spreadRad * 2;
+    _dir.y += (Math.random() - 0.5) * spreadRad;
+    _dir.z += (Math.random() - 0.5) * spreadRad * 2;
+    _dir.normalize();
+
+    const ball = this.balls.find((b) => !b.alive) ?? this.balls[0];
+    ball.alive = true;
+    ball.p.copy(_v);
+    ball.v.copy(_dir).multiplyScalar(ammo.speed);
+    ball.type = type;
+    ball.firedBy = ship;
+    ball.isPlayer = ship.isPlayer;
+    ball.life = COMBAT.MAX_RANGE / ammo.speed + 2;
+
+    this.ctx.effects?.muzzleFlash(_v, _dir);
+    this.ctx.events?.emit('cannon:fire', { ship, pos: _v.clone(), isPlayer: ship.isPlayer });
+  }
+
+  _hitShip(ball) {
+    const ships = this.ctx.ships?.list ?? [];
+    for (const ship of ships) {
+      if (!ship.alive || ship.sinking || ship === ball.firedBy) continue;
+      _local.copy(ball.p);
+      ship.group.worldToLocal(_local);
+      const t = ship.type;
+      if (
+        Math.abs(_local.x) < t.beam / 2 + 0.4 &&
+        _local.y > -t.draft && _local.y < t.freeboard + 6 &&
+        Math.abs(_local.z) < t.length / 2 + 0.5
+      ) {
+        return ship;
+      }
+    }
+    return null;
+  }
+
+  update(dt) {
+    const ctx = this.ctx;
+
+    // staggered shots
+    for (let i = this._pending.length - 1; i >= 0; i--) {
+      const job = this._pending[i];
+      job.delay -= dt;
+      if (job.delay <= 0) {
+        this._pending.splice(i, 1);
+        this._fireOne(job);
+      }
+    }
+
+    // chainshot slowdowns decay
+    for (const [ship, timer] of this._chainSlow) {
+      const left = timer - dt;
+      if (left <= 0 || !ship.alive) {
+        ship.physics.maxSpeedCap = null;
+        this._chainSlow.delete(ship);
+      } else {
+        this._chainSlow.set(ship, left);
+      }
+    }
+
+    // simulate balls
+    let n = 0;
+    for (const ball of this.balls) {
+      if (!ball.alive) continue;
+      ball.life -= dt;
+      ball.v.y -= COMBAT.BALL_GRAVITY * dt;
+      ball.p.addScaledVector(ball.v, dt);
+
+      let dead = ball.life <= 0;
+
+      if (!dead) {
+        const hit = this._hitShip(ball);
+        if (hit) {
+          dead = true;
+          const ammo = AMMO[ball.type] ?? AMMO.round;
+          let dmg = ammo.dmg * (0.85 + Math.random() * 0.3);
+          if (ball.type === 'chain') {
+            this._chainSlow.set(hit, 12);
+            hit.physics.maxSpeedCap = hit.type.maxSpeed * 0.5;
+          }
+          if (ball.type === 'grape') {
+            hit.crewCount = Math.max(0, hit.crewCount - (1 + Math.floor(Math.random() * 2)));
+            dmg *= hit === ctx.playerShip?.ship ? 1 : 0.8;
+          }
+          if (ball.isPlayer) {
+            dmg *= ctx.progression?.getMod?.('cannonDamage') ?? 1;
+            hit._lastHitByPlayer = true;
+          }
+          hit.applyDamage(dmg, ball.p);
+          ctx.effects?.woodBurst(ball.p, 6);
+          ctx.effects?.sparks(ball.p, 4);
+          ctx.events?.emit('ship:hit', {
+            ship: hit, byPlayer: ball.isPlayer, onPlayer: hit === ctx.playerShip?.ship,
+          });
+        }
+      }
+
+      if (!dead) {
+        const waterY = ctx.ocean?.getHeight(ball.p.x, ball.p.z) ?? 0;
+        if (ball.p.y <= waterY) {
+          dead = true;
+          _v.set(ball.p.x, waterY, ball.p.z);
+          ctx.effects?.splash(_v, 0.9);
+        } else if (ctx.world && ball.p.y <= ctx.world.getTerrainHeight(ball.p.x, ball.p.z)) {
+          dead = true;
+          ctx.effects?.woodBurst(ball.p, 3);
+        }
+      }
+
+      if (dead) {
+        ball.alive = false;
+        continue;
+      }
+      _m.compose(ball.p, _q, _s);
+      this.ballMesh.setMatrixAt(n++, _m);
+    }
+    this.ballMesh.count = n;
+    if (n) this.ballMesh.instanceMatrix.needsUpdate = true;
+
+    this._updatePlayerGunnery();
+    this._updateBoardingOffers();
+  }
+
+  _updatePlayerGunnery() {
+    const ctx = this.ctx;
+    if (ctx.mode !== 'sail' || ctx.time.paused) {
+      ctx.events?.emit('aim:update', { side: null });
+      return;
+    }
+    const input = ctx.input;
+    const ps = ctx.playerShip;
+    const ship = ps?.ship;
+    if (!ship) return;
+
+    // ammo selection
+    for (const [key, code] of [['round', 'Digit1'], ['chain', 'Digit2'], ['grape', 'Digit3']]) {
+      if (input.wasPressed(code) && this.playerAmmo !== key) {
+        this.playerAmmo = key;
+        ctx.events?.emit('toast', { text: `${AMMO[key].label} loaded.`, kind: 'info' });
+      }
+    }
+
+    const side = ps.aimSide;
+    if (side) {
+      const reload = side === 'L' ? ship.reloadL : ship.reloadR;
+      ctx.events?.emit('aim:update', {
+        side, ready: reload <= 0, reload,
+        reloadMax: this.reloadTimeFor(ship), ammo: this.playerAmmo,
+      });
+      if (input.mouse.wasPressed(0)) {
+        this.fireBroadside(ship, side, { type: this.playerAmmo });
+      }
+    } else {
+      ctx.events?.emit('aim:update', { side: null });
+    }
+  }
+
+  _updateBoardingOffers() {
+    const ctx = this.ctx;
+    const ps = ctx.playerShip?.ship;
+    if (!ps || ctx.mode !== 'sail') return;
+    for (const ship of ctx.ships?.list ?? []) {
+      if (ship === ps || !ship.alive || ship.sinking || ship.isPlayer) continue;
+      if (this._offered.has(ship)) continue;
+      if (ship.hull > ship.hullMax * 0.25) continue;
+      if (ship.position.distanceTo(ps.position) > COMBAT.BOARD_RANGE) continue;
+      this._offered.add(ship);
+      ctx.events?.emit('boarding:offer', { ship });
+    }
+  }
+}
+
+export { AMMO };
