@@ -79,6 +79,7 @@ export class EnemyFleet {
     const pos = { x: p.x + Math.sin(a) * d, z: p.z + Math.cos(a) * d };
     const type = req.typeKey ?? (req.role === 'hunter' ? 'frigate' : 'sloop');
     const ship = this._spawn(type, req.faction ?? 'crown', req.role ?? 'patrol', pos);
+    if (ship) ship._brainRole = req.role ?? 'patrol';
     if (ship && req.role === 'hunter') {
       const entry = this.entries.find((e) => e.ship === ship);
       if (entry) { entry.brain.provoked = true; entry.brain.state = 'engage'; }
