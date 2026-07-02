@@ -224,6 +224,9 @@ function makeSailMaterial(isPlayer) {
     map: sailTexture(isPlayer),
     side: THREE.DoubleSide,
     roughness: 0.9,
+    // cloth catches skylight; keeps sails readable at grazing sun angles
+    emissive: 0x8a8474,
+    emissiveIntensity: 0.22,
   });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uSail = { value: 1 };
@@ -254,6 +257,8 @@ function makeFlagMaterial(faction) {
     map: flagTexture(faction),
     side: THREE.DoubleSide,
     roughness: 0.85,
+    emissive: 0x777777,
+    emissiveIntensity: 0.2,
   });
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = { value: 0 };
@@ -357,6 +362,7 @@ export function buildShip(typeKey, opts = {}) {
       const sail = new THREE.Mesh(sailGeo, sailMat);
       sail.position.set(0, yardY - 0.08, mz - 0.12);
       sail.castShadow = true;
+      sail.receiveShadow = false; // thin cloth self-shadow acne reads as black
       group.add(sail);
       sails.push(sail);
     }
@@ -379,6 +385,7 @@ export function buildShip(typeKey, opts = {}) {
   // flag at the tallest mast
   const flagMat = makeFlagMaterial(isPlayer ? null : opts.faction);
   const flag = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.3, 6, 3), flagMat);
+  flag.receiveShadow = false;
   const mainIdx = type.masts === 1 ? 0 : 1;
   const mainMz = mastPositions[Math.min(mainIdx, mastPositions.length - 1)] * type.length;
   const mainMh = mastHeight * (mastPositions.length > 1 ? 1.08 : 1);

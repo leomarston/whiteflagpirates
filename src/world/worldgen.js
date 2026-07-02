@@ -139,11 +139,11 @@ export class World {
     let h = this.field.heightAt(x, z);
     for (const port of this.ports) {
       for (const s of port.walkSurfaces) {
-        // rotate into surface space
+        // into surface space: local +Z runs along the rect's heading (rot)
         const dx = x - s.x;
         const dz = z - s.z;
-        const cos = Math.cos(-s.rot);
-        const sin = Math.sin(-s.rot);
+        const sin = Math.sin(s.rot);
+        const cos = Math.cos(s.rot);
         const lx = dx * cos - dz * sin;
         const lz = dx * sin + dz * cos;
         if (Math.abs(lx) <= s.hw && Math.abs(lz) <= s.hd && s.y > h) h = s.y;

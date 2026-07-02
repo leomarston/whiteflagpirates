@@ -54,9 +54,15 @@ export class Trading {
       };
       mk('🚶 Step ashore', () => {
         this.ui.closeScreen();
-        const spawn = port.dockWalk ?? port.position;
+        const heading = (port.dockHeading ?? 0) + Math.PI; // inland
+        const base = port.dockWalk ?? port.position;
+        const spawn = {
+          x: base.x + Math.sin(heading) * 3.2,
+          y: base.y,
+          z: base.z + Math.cos(heading) * 3.2,
+        };
         ctx.setMode('foot');
-        ctx.character?.spawnAt(spawn, (port.dockHeading ?? 0) + Math.PI);
+        ctx.character?.spawnAt(spawn, heading);
       }, 'primary');
       mk('⚖ Market', () => this.openMarket(port));
       if (port.flags?.hasShipwright) mk('🔨 Shipwright', () => this.openShipwright(port));
