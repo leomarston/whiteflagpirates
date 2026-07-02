@@ -84,8 +84,8 @@ export class PlayerShip {
 
     if (sailMode && !ctx.time.paused) {
       // sail trim
-      if (input.isDown('KeyW')) this.sailTarget = clamp(this.sailTarget + dt * 0.45, 0, 1);
-      if (input.isDown('KeyS')) this.sailTarget = clamp(this.sailTarget - dt * 0.55, 0, 1);
+      if (input.isDown('KeyW')) this.sailTarget = clamp(this.sailTarget + dt * 0.65, 0, 1);
+      if (input.isDown('KeyS')) this.sailTarget = clamp(this.sailTarget - dt * 0.8, 0, 1);
       ship.sailAmount = damp(ship.sailAmount, this.anchored ? 0 : this.sailTarget, 2.5, dt);
 
       // rudder with spring return

@@ -66,7 +66,14 @@ export class Input {
   }
 
   requestPointerLock(el) {
-    if (!this.pointerLocked) el.requestPointerLock?.({ unadjustedMovement: true });
+    if (this.pointerLocked) return;
+    try {
+      const p = el.requestPointerLock?.({ unadjustedMovement: true });
+      // some platforms reject the options object — retry plain
+      p?.catch?.(() => el.requestPointerLock?.());
+    } catch {
+      try { el.requestPointerLock?.(); } catch { /* unavailable */ }
+    }
   }
 
   exitPointerLock() {

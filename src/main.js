@@ -126,7 +126,8 @@ function startPositionFor(fresh) {
   if (island?.port) {
     const d = island.port.dockPosition;
     const away = Math.atan2(d.x - island.center.x, d.z - island.center.z);
-    return { x: d.x + Math.sin(away) * 130, z: d.z + Math.cos(away) * 130, heading: away + Math.PI };
+    // spawn seaward of the dock, bow pointing to open water
+    return { x: d.x + Math.sin(away) * 150, z: d.z + Math.cos(away) * 150, heading: away };
   }
   return { x: ix + gullhaven.radius + 260, z: iz, heading: -Math.PI / 2 };
 }

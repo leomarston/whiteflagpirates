@@ -102,8 +102,8 @@ export class Weather {
     this._blend = Math.min(1, this._blend + dt / 24);
 
     // targets blend smoothly toward the active preset
-    this.gloom = damp(this.gloom, preset.gloom, 0.12, dt);
-    this.fogDensity = lerp(this.fogDensity, preset.fog, Math.min(1, dt * 0.12));
+    this.gloom = damp(this.gloom, preset.gloom, 0.22, dt);
+    this.fogDensity = lerp(this.fogDensity, preset.fog, Math.min(1, dt * 0.2));
     this.intensity = damp(this.intensity, CONDITIONS.indexOf(this.condition) / (CONDITIONS.length - 1), 0.15, dt);
 
     ocean?.setSeaState(preset.sea);

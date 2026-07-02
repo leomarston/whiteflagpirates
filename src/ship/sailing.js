@@ -10,8 +10,9 @@ const _p = new THREE.Vector3();
 /** Sail efficiency vs relative wind angle (0 = running downwind, π = in irons). */
 export function sailEfficiency(relAngle) {
   const x = Math.abs(relAngle);
-  if (x > 2.65) return 0;                       // no-go cone (~30° into the wind)
-  if (x > 1.9) return lerp(1.0, 0, (x - 1.9) / 0.75); // close hauled fade
+  if (x > 2.8) return 0;                        // no-go cone (~20° into the wind)
+  if (x > 2.3) return lerp(0.45, 0, (x - 2.3) / 0.5);  // pinching
+  if (x > 1.9) return lerp(1.0, 0.45, (x - 1.9) / 0.4); // close hauled fade
   if (x > 0.9) return lerp(0.78, 1.0, (x - 0.9) / 1.0); // beam → broad reach peak
   return lerp(0.55, 0.78, x / 0.9);             // dead run is lazy
 }

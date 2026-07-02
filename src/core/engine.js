@@ -81,11 +81,11 @@ export class Engine {
     this.camera.updateProjectionMatrix();
   }
 
-  /** cb(dt) is called every frame with dt clamped to [0, 1/15]. */
+  /** cb(dt) is called every frame with dt clamped to [0, 1/10]. */
   start(cb) {
     this._clock.start();
     this.renderer.setAnimationLoop(() => {
-      const dt = clamp(this._clock.getDelta(), 0, 1 / 15);
+      const dt = clamp(this._clock.getDelta(), 0, 1 / 10);
       this.fps += (1 / Math.max(dt, 1e-4) - this.fps) * 0.05;
       cb(dt);
     });

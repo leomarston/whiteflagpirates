@@ -5,7 +5,7 @@ import { clamp01, lerp } from '../core/utils.js';
 import { SHIP_TYPES } from './shipTypes.js';
 
 const PAINTS = {
-  default: { hull: '#5c4028', stripe: '#c9a24b' },
+  default: { hull: '#7a563a', stripe: '#c9a24b' },
   storm: { hull: '#3d3a38', stripe: '#8a9aa8' },
   pearl: { hull: '#8a7a5c', stripe: '#e8dcc0' },
   blood: { hull: '#5c2018', stripe: '#c9a24b' },
@@ -87,14 +87,14 @@ function sailTexture(isPlayer) {
   g.fillRect(40, 170, 34, 26);
   g.fillRect(180, 60, 28, 30);
   if (isPlayer) {
-    // faded white-flag gull emblem
-    g.strokeStyle = 'rgba(90,102,114,0.4)';
-    g.lineWidth = 7;
+    // faint white-flag gull emblem, wings meeting mid-sail
+    g.strokeStyle = 'rgba(90,102,114,0.18)';
+    g.lineWidth = 5;
     g.beginPath();
-    g.arc(100, 148, 52, Math.PI * 1.15, Math.PI * 1.62);
+    g.arc(103, 158, 34, Math.PI * 1.2, Math.PI * 1.75);
     g.stroke();
     g.beginPath();
-    g.arc(156, 148, 52, Math.PI * 1.38, Math.PI * 1.85);
+    g.arc(153, 158, 34, Math.PI * 1.25, Math.PI * 1.8);
     g.stroke();
   }
   const tex = new THREE.CanvasTexture(c);
@@ -242,8 +242,8 @@ uniform float uTime;`)
   transformed.z += dome * billow * 1.35;
   float luff = (1.0 - uAlign) * uSail;
   transformed.z += sin(uTime * 9.0 + uv.y * 9.0 + uv.x * 4.0) * 0.06 * (luff + 0.12);
-  // furling: shrink the sail upward as uSail drops
-  transformed.y = mix(transformed.y, abs(transformed.y) * 0.06 + transformed.y * 0.06, (1.0 - uSail) * step(transformed.y, 0.0) );
+  // sail geometry hangs from y=0 (the yard): furling scales the cloth up to it
+  transformed.y *= mix(0.12, 1.0, smoothstep(0.0, 1.0, uSail));
 }`);
   };
   return mat;
@@ -280,6 +280,7 @@ export function buildShip(typeKey, opts = {}) {
     map: plankTexture(paint.hull, paint.stripe),
     roughness: 0.82,
     metalness: 0.04,
+    side: THREE.DoubleSide,
   });
   const hull = new THREE.Mesh(hullGeo, hullMat);
   hull.castShadow = true;
@@ -351,8 +352,10 @@ export function buildShip(typeKey, opts = {}) {
       yard.position.set(0, yardY, mz);
       group.add(yard);
 
-      const sail = new THREE.Mesh(new THREE.PlaneGeometry(sw, sh, 8, 8), sailMat);
-      sail.position.set(0, yardY - sh / 2 - 0.1, mz - 0.12);
+      const sailGeo = new THREE.PlaneGeometry(sw, sh, 8, 8);
+      sailGeo.translate(0, -sh / 2, 0); // top edge (yard) at local y=0
+      const sail = new THREE.Mesh(sailGeo, sailMat);
+      sail.position.set(0, yardY - 0.08, mz - 0.12);
       sail.castShadow = true;
       group.add(sail);
       sails.push(sail);

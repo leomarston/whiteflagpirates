@@ -29,6 +29,7 @@ export class Ocean {
       uWaveK: { value: waves.ks },
       uWaveC: { value: waves.cs },
       uWaveA: { value: waves.as },
+      uTotalAmp: { value: waves.as.reduce((s, a) => s + a, 0) },
       uShoreTex: { value: this._buildShoreTexture() },
       uWorldSize: { value: WORLD.SEA_SIZE },
       uDeepColor: { value: new THREE.Color(COLORS.deepWater) },

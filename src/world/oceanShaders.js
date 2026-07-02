@@ -29,6 +29,7 @@ uniform vec2 uWaveDir[${NUM_WAVES}];
 uniform float uWaveK[${NUM_WAVES}];
 uniform float uWaveC[${NUM_WAVES}];
 uniform float uWaveA[${NUM_WAVES}];
+uniform float uTotalAmp;            // sum of base amplitudes (meters)
 uniform sampler2D uShoreTex;        // R: shore proximity 0(open sea)..1(land)
 uniform float uWorldSize;           // full extent covered by uShoreTex
 
@@ -66,7 +67,7 @@ void main() {
   }
 
   vNormal = normalize(cross(binorm, tang));
-  vCrest = disp.y / max(uAmp, 1e-4);
+  vCrest = disp.y / max(uAmp * uTotalAmp, 1e-4); // ≈ [-1, 1]
 
   wp.xyz += disp;
   vWorldPos = wp.xyz;
@@ -108,7 +109,7 @@ void main() {
   vec2 uv2 = vWorldPos.xz * 0.011 - vec2(uTime * 0.009, uTime * 0.013);
   vec3 n1 = texture2D(uNoiseTex, uv1).rgb * 2.0 - 1.0;
   vec3 n2 = texture2D(uNoiseTex, uv2).rgb * 2.0 - 1.0;
-  vec3 N = normalize(vNormal + vec3(n1.x + n2.x, 0.0, n1.y + n2.y) * 0.22);
+  vec3 N = normalize(vNormal + vec3(n1.x + n2.x, 0.0, n1.y + n2.y) * 0.075);
 
   float NdV = max(dot(N, V), 0.0);
   float fresnel = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
@@ -131,13 +132,13 @@ void main() {
   // sun specular: tight glint + broad sheen
   vec3 H = normalize(V + uSunDir);
   float spec = pow(max(dot(N, H), 0.0), 720.0) * 2.4
-             + pow(max(dot(N, H), 0.0), 48.0) * 0.18;
-  col += uSunColor * spec * (1.0 - uNight * 0.85) * max(uSunDir.y + 0.03, 0.0) * 4.0;
+             + pow(max(dot(N, H), 0.0), 48.0) * 0.14;
+  col += uSunColor * spec * (1.0 - uNight * 0.85) * max(uSunDir.y + 0.03, 0.0) * 1.9;
 
   // foam: crests + shoreline surf, broken up by noise
-  float foamNoise = texture2D(uNoiseTex, vWorldPos.xz * 0.09 + uTime * 0.03).r;
-  float crestFoam = smoothstep(0.62, 1.0, vCrest * (0.7 + 0.6 * uStormMix)) *
-                    smoothstep(0.35, 0.75, foamNoise);
+  float foamNoise = texture2D(uNoiseTex, vWorldPos.xz * 0.045 + uTime * 0.02).r;
+  float crestFoam = smoothstep(0.68, 1.0, vCrest * (0.62 + 0.55 * uStormMix)) *
+                    smoothstep(0.4, 0.8, foamNoise);
   float shoreWave = sin(vShore * 26.0 - uTime * 1.7) * 0.5 + 0.5;
   float shoreFoam = smoothstep(0.42, 0.75, vShore) * smoothstep(0.3, 0.9, shoreWave * foamNoise * 1.6);
   float foam = clamp(crestFoam + shoreFoam, 0.0, 1.0);

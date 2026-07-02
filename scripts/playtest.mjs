@@ -23,6 +23,10 @@ const browser = await chromium.launch({
   ],
 });
 const page = await browser.newPage({ viewport: { width: 1440, height: 810 } });
+// software rendering is slow — force the low quality preset before boot
+await page.addInitScript(() => {
+  localStorage.setItem('whiteflagpirates_save_v1_settings', JSON.stringify({ quality: 'low' }));
+});
 
 const errors = [];
 const warned = new Set();
