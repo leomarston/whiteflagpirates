@@ -2,12 +2,23 @@
 // Serves dist/ on process.env.PORT (Railway/Render/Fly set this) bound to 0.0.0.0.
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), 'dist');
 const PORT = Number(process.env.PORT) || 8080;
 const HOST = '0.0.0.0';
+
+// Fail loudly (with a clear log) if the build never produced dist/, instead of
+// silently 404ing every request — makes a broken deploy obvious in the logs.
+if (!existsSync(join(ROOT, 'index.html'))) {
+  console.error(
+    `[server] FATAL: ${ROOT}/index.html not found. The build did not run or ` +
+    `did not produce dist/. Run "npm run build" before "npm start".`,
+  );
+  process.exit(1);
+}
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',

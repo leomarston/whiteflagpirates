@@ -37,11 +37,18 @@ npm start        # serves dist/ on $PORT (default 8080) via server.js
 `server.js` is a zero-dependency static server that binds to `0.0.0.0:$PORT`,
 sets correct MIME types, caches hashed assets, and revalidates `index.html`.
 
-**Railway** (or any Nixpacks host) works out of the box — `railway.json` /
-`nixpacks.toml` pin the build (`npm run build`) and start (`npm start`)
-commands and a `/` healthcheck. Just point Railway at this repo and deploy;
-it injects `PORT` automatically. The game is fully self-contained (no
-external assets, APIs, or network calls), so it runs on any static host.
+**Railway / Docker** — deployment uses the included `Dockerfile` (a multi-stage
+build: install all deps → `vite build` → ship a slim runtime image that serves
+`dist/` with `server.js`). `railway.json` points Railway at the Dockerfile and
+sets a `/` healthcheck; Railway injects `PORT` automatically. Just point Railway
+at this repo and deploy.
+
+> The Dockerfile installs dev dependencies explicitly (`npm ci --include=dev`)
+> so the `vite` build step works even under `NODE_ENV=production` — the common
+> cause of "works locally, blank on the host" for Vite apps.
+
+The game is fully self-contained (no external assets, APIs, or network calls),
+so it runs on any static host: `npm run build` then serve `dist/`.
 
 ## What's in the game
 
