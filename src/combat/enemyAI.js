@@ -326,5 +326,5 @@ function hostileNearby(fleet, pos) {
   for (const { ship, brain } of fleet.entries) {
     if (brain.role === 'pirate' && ship.position.distanceTo(pos) < 500) return true;
   }
-  return true; // the player counts as a threat to merchants
+  return false;
 }

@@ -161,6 +161,8 @@ export class SwordCombat {
         if (this.queued) {
           this.queued = false;
           this.startAttack(false);
+        } else {
+          this.combo = 0; // chain broken — next light attack starts fresh
         }
       }
     }

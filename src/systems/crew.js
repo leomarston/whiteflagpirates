@@ -76,7 +76,7 @@ export class Crew {
   candidatesFor(portName) {
     const day = Math.floor(this.ctx.time.t / this.ctx.time.dayLength);
     const cached = this._candidates.get(portName);
-    if (cached && cached.day === day) return cached.list;
+    if (cached && cached.day === day) return cached.list.filter((c) => !c.hired);
     const island = this.ctx.data.islands.find((i) => i.port?.name === portName);
     const rng = mulberry32((island?.seed ?? 1) * 31 + day);
     const n = island?.port?.size === 'capital' ? 5 : island?.port?.size === 'village' ? 3 : 4;
@@ -88,16 +88,18 @@ export class Crew {
       list.push(hand);
     }
     this._candidates.set(portName, { day, list });
-    return list;
+    return list.filter((c) => !c.hired);
   }
 
   hire(candidate) {
     const ctx = this.ctx;
     const max = ctx.playerShip?.ship?.type?.crewMax ?? 8;
+    if (candidate.hired) return { ok: false, why: 'Already signed on' };
     if (this.roster.length >= max) return { ok: false, why: 'Ship berths are full' };
     if ((ctx.state.data.gold ?? 0) < candidate.cost) return { ok: false, why: 'Not enough gold' };
     ctx.state.addGold(-candidate.cost);
-    const { cost, ...hand } = candidate;
+    candidate.hired = true; // remove from the tavern's list so it can't be re-hired
+    const { cost, hired, ...hand } = candidate;
     this.roster.push(hand);
     ctx.state.addLog(`Signed ${hand.name} aboard as ${hand.role}.`);
     ctx.events?.emit('crew:change', {});

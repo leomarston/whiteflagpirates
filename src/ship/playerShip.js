@@ -38,22 +38,36 @@ export class PlayerShip {
       this._docked = false;
     });
     ctx.events?.on('ship:upgraded', () => this.applyUpgrades());
-    ctx.events?.on('ship:undock', () => { this._docked = false; this.anchored = false; });
+    // buying a new hull or repainting rebuilds the ship in place
+    ctx.events?.on('ship:changed', () => { this._rebuild(true); });
+    ctx.events?.on('ship:undock', () => {
+      this._docked = false;
+      this.anchored = false;
+      if (this.ship) this.ship.physics.anchored = false;
+    });
     ctx.events?.on('mode:change', ({ mode }) => {
       if (mode === 'sail') this.ctx.input?.exitPointerLock?.();
     });
   }
 
-  _rebuild() {
+  _rebuild(force = false) {
     const data = this.ctx.state?.data?.ship ?? { type: 'sloop' };
-    if (this.ship && this.ship.typeKey === data.type) return;
-    if (this.ship) this.ctx.ships?.remove(this.ship);
+    if (!force && this.ship && this.ship.typeKey === data.type) return;
+    // preserve where the old ship was so a new hull appears at the dock, not origin
+    let px = 0, pz = 0, ph = 0;
+    if (this.ship) {
+      px = this.ship.group.position.x;
+      pz = this.ship.group.position.z;
+      ph = this.ship.physics.heading;
+      this.ctx.ships?.remove(this.ship);
+    }
     this.ship = this.ctx.ships?.createShip(data.type, {
       player: true,
       faction: 'corsairs',
       paint: data.paint === 'default' ? undefined : data.paint,
       name: data.name ?? 'White Gull',
     });
+    if (this.ship && (px || pz)) this.ship.physics.placeAt(px, pz, ph);
     this.applyUpgrades();
   }
 

@@ -113,6 +113,12 @@ export class Quests {
     }
     this.ctx.events?.emit('quest:accept', { quest: def });
     this.ctx.state.addLog(`Took on "${def.title}".`);
+    // credit a 'visit' objective immediately if the island is already charted —
+    // 'island:discovered' is one-shot and would otherwise never re-fire (softlock)
+    if (def.objective?.type === 'visit' &&
+      (this.ctx.state.data.discovered ?? []).includes(def.objective.islandId)) {
+      this._progress('visit', { islandId: def.objective.islandId });
+    }
     return true;
   }
 

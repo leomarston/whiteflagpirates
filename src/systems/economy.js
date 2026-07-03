@@ -42,10 +42,11 @@ export class Economy {
       for (const n of this._nudges) {
         if (n.portName === portName && n.until > t && (!n.key || n.key === good.key)) price *= n.mult;
       }
-      // freetrader skill: better prices
+      // freetrader skill: better prices — but sell must stay below buy at the
+      // same port, or stacked price skills create a same-port money loop
       const edge = (this.ctx.progression?.getMod?.('priceEdge') ?? 1);
       const buy = Math.max(2, Math.round(price / edge));
-      const sell = Math.max(1, Math.round(price * ECONOMY.SELL_MARGIN * edge));
+      const sell = Math.max(1, Math.min(Math.round(price * ECONOMY.SELL_MARGIN * edge), buy - 1));
       const contrabandHere = good.contraband && island.faction === 'crown';
       out.push({
         key: good.key,

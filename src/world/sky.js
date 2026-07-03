@@ -149,6 +149,7 @@ export class Sky {
 
     this.moonLight = new THREE.DirectionalLight(0x9db4d8, 0);
     ctx.scene.add(this.moonLight);
+    ctx.scene.add(this.moonLight.target); // else moonlight direction resolves to origin
     this.hemi = new THREE.HemisphereLight(0x8fb0d0, 0x555548, 0.5);
     ctx.scene.add(this.hemi);
 
@@ -211,6 +212,8 @@ export class Sky {
     // moon light at night — enough to read the world by
     this.moonLight.intensity = night * 0.7 * (1 - gloom * 0.7);
     this.moonLight.position.copy(target).addScaledVector(this.moonDir, 420);
+    this.moonLight.target.position.copy(target);
+    this.moonLight.target.updateMatrixWorld();
 
     // hemisphere ambient — keep a cool floor at night so foot travel is legible
     sampleStops(e, 5, this.hemi.color);

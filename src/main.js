@@ -119,7 +119,8 @@ const gullhaven = ISLANDS.find((i) => i.id === 'gullhaven') ?? ISLANDS[0];
 
 function startPositionFor(fresh) {
   const saved = ctx.state.data.position;
-  if (!fresh && saved) return { x: saved[0], z: saved[2] ?? saved[1], heading: saved[3] ?? saved[2] ?? 0 };
+  // persist() writes [x, z, heading] — read it back with matching indices
+  if (!fresh && saved) return { x: saved[0], z: saved[1], heading: saved[2] ?? 0 };
   // just off Gullhaven's harbor
   const [ix, iz] = gullhaven.position;
   const island = ctx.world?.islands?.find((w) => w.def.id === gullhaven.id);

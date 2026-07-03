@@ -33,9 +33,11 @@ export const SKILLS = {
 };
 
 const XP_SHIP = { cutter: 25, sloop: 30, brig: 50, merchantman: 45, frigate: 70, galleon: 90 };
+// each entry is the exclusive upper bound of its band (repLabel returns the
+// first whose bound the value is below), so 'Hunted' covers the lowest reps
 const REP_LABELS = [
-  [-100, 'Hunted'], [-50, 'Outlaw'], [-20, 'Distrusted'], [20, 'Neutral'],
-  [50, 'Respected'], [80, 'Honored'], [101, 'Legend'],
+  [-60, 'Hunted'], [-25, 'Outlaw'], [-8, 'Distrusted'], [12, 'Neutral'],
+  [40, 'Respected'], [75, 'Honored'], [Infinity, 'Legend'],
 ];
 
 export class Progression {

@@ -382,6 +382,10 @@ export class NPCManager {
         this._promptShown = false;
         ctx.events?.emit('prompt', { id: 'npc', text: null });
       }
+    } else if (this._promptShown) {
+      // left foot mode (or paused) with a prompt still up — clear it
+      this._promptShown = false;
+      ctx.events?.emit('prompt', { id: 'npc', text: null });
     }
   }
 }
