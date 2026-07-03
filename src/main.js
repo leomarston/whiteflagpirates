@@ -234,6 +234,32 @@ function checkBoardOwnShip() {
 // autosave
 let saveTimer = 60;
 
+// --- camera shake (decoupled; layered on top of the active camera each frame) ---
+const shake = { trauma: 0 };
+ctx.fx = {
+  shake(amount = 0.4) { shake.trauma = Math.min(1, shake.trauma + amount); },
+};
+events.on('shake', (p) => ctx.fx.shake(typeof p === 'number' ? p : (p?.amount ?? 0.4)));
+events.on('cannon:fire', ({ isPlayer }) => { if (isPlayer) ctx.fx.shake(0.3); });
+events.on('ship:hit', ({ onPlayer }) => { if (onPlayer) ctx.fx.shake(0.5); });
+events.on('player:hurt', () => ctx.fx.shake(0.3));
+events.on('sword:hit', ({ heavy }) => ctx.fx.shake(heavy ? 0.22 : 0.12));
+
+function renderWithShake(dt) {
+  if (shake.trauma > 0.001) {
+    const amp = shake.trauma * shake.trauma * (ctx.mode === 'foot' ? 0.35 : 0.7);
+    const px = engine.camera.position.x, py = engine.camera.position.y, pz = engine.camera.position.z;
+    engine.camera.position.x += (Math.random() - 0.5) * amp;
+    engine.camera.position.y += (Math.random() - 0.5) * amp;
+    engine.camera.position.z += (Math.random() - 0.5) * amp;
+    engine.render();
+    engine.camera.position.set(px, py, pz); // restore so controllers don't drift
+    shake.trauma = Math.max(0, shake.trauma - dt * 2.4);
+  } else {
+    engine.render();
+  }
+}
+
 // --- main loop ---------------------------------------------------------------
 
 const order = [
@@ -292,7 +318,7 @@ engine.start((dt) => {
     }
   }
 
-  engine.render();
+  renderWithShake(dt);
   input.endFrame();
 });
 
