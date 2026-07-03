@@ -1,0 +1,13 @@
+# Explicit build plan for Railway/Nixpacks so deploys are deterministic.
+# The install phase is auto-detected from package-lock.json.
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm start"
+
+[variables]
+NODE_VERSION = "20"
+# Vite build only needs devDependencies at build time; keep them.
+NPM_CONFIG_PRODUCTION = "false"

@@ -27,7 +27,21 @@ npm install
 npm run dev      # then open the printed URL
 ```
 
-Production build: `npm run build && npm run preview`.
+## Production / deploy
+
+```bash
+npm run build    # emits dist/
+npm start        # serves dist/ on $PORT (default 8080) via server.js
+```
+
+`server.js` is a zero-dependency static server that binds to `0.0.0.0:$PORT`,
+sets correct MIME types, caches hashed assets, and revalidates `index.html`.
+
+**Railway** (or any Nixpacks host) works out of the box — `railway.json` /
+`nixpacks.toml` pin the build (`npm run build`) and start (`npm start`)
+commands and a `/` healthcheck. Just point Railway at this repo and deploy;
+it injects `PORT` automatically. The game is fully self-contained (no
+external assets, APIs, or network calls), so it runs on any static host.
 
 ## What's in the game
 
