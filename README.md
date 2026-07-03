@@ -11,6 +11,15 @@ not surrender.
 Built entirely with **three.js** — every mesh, texture, sound, and note of music
 is generated procedurally at runtime. No asset files.
 
+![Title screen](docs/screenshots/title.png)
+
+| | |
+|---|---|
+| ![Golden hour at sea](docs/screenshots/golden-hour.png) | ![A storm rising](docs/screenshots/storm.png) |
+| *Golden hour on the open sea* | *A squall darkens the Verge* |
+| ![Harbor at night](docs/screenshots/night-harbor.png) | ![The tavern](docs/screenshots/tavern.png) |
+| *Lantern-lit dock after dark* | *Hiring crew at the Drowned Lantern* |
+
 ## Play
 
 ```bash
