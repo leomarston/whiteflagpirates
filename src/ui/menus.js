@@ -49,7 +49,9 @@ export class Menus {
   _start(fresh) {
     this.title.classList.add('hidden');
     this.ctx.time.paused = false;
-    this.ctx.events?.emit('game:start', { fresh });
+    // beginGame resets/loads state BEFORE systems react, then emits game:start
+    if (this.ctx.beginGame) this.ctx.beginGame(fresh);
+    else this.ctx.events?.emit('game:start', { fresh });
   }
 
   _buildDeath() {

@@ -132,10 +132,18 @@ function startPositionFor(fresh) {
   return { x: ix + gullhaven.radius + 260, z: iz, heading: -Math.PI / 2 };
 }
 
-events.on('game:start', ({ fresh }) => {
+// Reset/load must happen BEFORE systems react, so they initialize against the
+// correct state. menus.js calls beginGame() which resets first, then emits.
+ctx.beginGame = (fresh) => {
   if (fresh) ctx.state.reset();
   else ctx.state.load();
   if (ctx.state.data.dayFrac != null) ctx.time.dayFrac = ctx.state.data.dayFrac;
+  ctx.time.paused = false;
+  events.emit('game:start', { fresh });
+};
+
+events.on('game:start', ({ fresh }) => {
+  // state is already reset/loaded by beginGame() at this point
   const p = startPositionFor(fresh);
   ctx.playerShip?.placeAt?.(p.x, p.z, p.heading);
   ctx.setMode('sail');

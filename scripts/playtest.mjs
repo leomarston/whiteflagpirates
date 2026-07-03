@@ -66,6 +66,7 @@ const started = await page.evaluate(() => {
     const btns = [...document.querySelectorAll('button, .menu-item, [data-action]')];
     const nv = btns.find((b) => /new voyage/i.test(b.textContent ?? ''));
     if (nv) { nv.click(); return 'clicked'; }
+    if (ctx.beginGame) { ctx.beginGame(true); return 'beginGame'; }
     ctx.events.emit('game:start', { fresh: true });
     return 'event';
   } catch (e) { return 'err:' + e; }
