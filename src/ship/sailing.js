@@ -7,14 +7,17 @@ const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _p = new THREE.Vector3();
 
-/** Sail efficiency vs relative wind angle (0 = running downwind, π = in irons). */
+/**
+ * Sail efficiency vs relative wind angle (0 = running downwind, π = straight
+ * into the wind). Arcade rig: the wind drives hard from EVERY quarter — no
+ * no-go cone, no crawling. Best across the wind, only a touch softer dead into
+ * it or dead downwind, so you're always fast whichever way you point.
+ */
 export function sailEfficiency(relAngle) {
   const x = Math.abs(relAngle);
-  if (x > 2.8) return 0;                        // no-go cone (~20° into the wind)
-  if (x > 2.3) return lerp(0.45, 0, (x - 2.3) / 0.5);  // pinching
-  if (x > 1.9) return lerp(1.0, 0.45, (x - 1.9) / 0.4); // close hauled fade
-  if (x > 0.9) return lerp(0.78, 1.0, (x - 0.9) / 1.0); // beam → broad reach peak
-  return lerp(0.55, 0.78, x / 0.9);             // dead run is lazy
+  if (x > 2.4) return lerp(1.0, 0.85, (x - 2.4) / (Math.PI - 2.4)); // into the wind: still strong
+  if (x > 0.8) return 1.0;                        // beam to broad reach: full power
+  return lerp(0.85, 1.0, x / 0.8);               // dead downwind: nearly full
 }
 
 export class ShipPhysics {
@@ -53,8 +56,8 @@ export class ShipPhysics {
     const windSpeed = weather?.wind.speed ?? 6;
     const rel = wrapAngle(this.heading - windAngle);
     const eff = sailEfficiency(rel);
-    // wind matters, but never leaves you crawling — strong floor so she always runs
-    let vmax = type.maxSpeed * this.speedMult * clamp(0.75 + windSpeed / 22, 0.75, 1.45);
+    // strong wind from every side — high floor so she always drives hard
+    let vmax = type.maxSpeed * this.speedMult * clamp(0.9 + windSpeed / 24, 0.9, 1.6);
     if (this.maxSpeedCap != null) vmax = Math.min(vmax, this.maxSpeedCap);
     const target = this.anchored ? 0 : vmax * eff * ship.sailAmount;
     // snappy acceleration so pressing W actually sends her going

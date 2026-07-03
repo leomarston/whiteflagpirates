@@ -5,11 +5,11 @@ import { clamp01, damp, lerp, mulberry32, randRange, TAU, wrapAngle } from '../c
 const CONDITIONS = ['clear', 'fair', 'overcast', 'rain', 'storm'];
 
 const PRESETS = {
-  clear: { sea: 0.18, cloud: 0.14, wind: [3, 6], fog: 0.00006, rain: 0, gloom: 0 },
-  fair: { sea: 0.3, cloud: 0.36, wind: [5, 8], fog: 0.00008, rain: 0, gloom: 0.08 },
-  overcast: { sea: 0.45, cloud: 0.74, wind: [7, 10], fog: 0.00013, rain: 0, gloom: 0.42 },
-  rain: { sea: 0.65, cloud: 0.9, wind: [9, 13], fog: 0.0002, rain: 0.7, gloom: 0.62 },
-  storm: { sea: 1.0, cloud: 1.0, wind: [13, 17], fog: 0.00034, rain: 1, gloom: 1 },
+  clear: { sea: 0.18, cloud: 0.14, wind: [10, 14], fog: 0.00006, rain: 0, gloom: 0 },
+  fair: { sea: 0.3, cloud: 0.36, wind: [12, 16], fog: 0.00008, rain: 0, gloom: 0.08 },
+  overcast: { sea: 0.45, cloud: 0.74, wind: [14, 18], fog: 0.00013, rain: 0, gloom: 0.42 },
+  rain: { sea: 0.65, cloud: 0.9, wind: [16, 21], fog: 0.0002, rain: 0.7, gloom: 0.62 },
+  storm: { sea: 1.0, cloud: 1.0, wind: [20, 26], fog: 0.00034, rain: 1, gloom: 1 },
 };
 
 export class Weather {
