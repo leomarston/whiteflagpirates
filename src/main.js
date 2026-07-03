@@ -167,6 +167,15 @@ events.on('ship:dock', ({ port, island }) => {
   persist();
 });
 
+// Go ashore on any island (non-port beaches, ruins, treasure). The ship stays
+// anchored offshore; walk/swim back to it to take the helm again.
+events.on('ship:goashore', ({ island, shore }) => {
+  ctx.setMode('foot');
+  ctx.character?.spawnAt(shore.point, shore.heading);
+  events.emit('toast', { text: `Ashore on ${island.def.name}.`, kind: 'discover' });
+  persist();
+});
+
 events.on('player:death', () => {
   setTimeout(() => events.emit('player:respawn'), 100);
 });

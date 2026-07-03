@@ -153,7 +153,7 @@ export class PlayerShip {
         input.requestPointerLock(ctx.engine.canvas);
       }
 
-      this._updateDocking();
+      this._updateLandfall();
       this._updateCamera(dt);
     }
 
@@ -165,26 +165,77 @@ export class PlayerShip {
     if (ctx.state?.data?.ship) ctx.state.data.ship.hull = ship.hull;
   }
 
-  _updateDocking() {
+  _updateLandfall() {
     const { ctx, ship } = this;
-    const near = ctx.world?.getNearestPort?.(ship.group.position);
-    const canDock = near && near.distance < SHIP_TUNING.DOCK_RANGE &&
-      Math.abs(ship.physics.speed) < SHIP_TUNING.DOCK_MAX_SPEED && !this._docked;
-    if (canDock) {
-      this._dockNear = near;
-      ctx.events?.emit('prompt', { id: 'dock', text: `E — Dock at ${near.port.name}` });
+    const pos = ship.group.position;
+
+    // 1. Formal port dock takes priority (opens market/tavern/shipwright menu).
+    //    Speed-tolerant now — pressing E anchors her, so a fast approach is fine.
+    const port = ctx.world?.getNearestPort?.(pos);
+    if (port && port.distance < 60 && !this._docked) {
+      this._landfall = 'dock';
+      ctx.events?.emit('prompt', { id: 'landfall', text: `E — Dock at ${port.port.name}` });
       if (ctx.input.wasPressed('KeyE')) {
         this._docked = true;
         this.anchored = true;
         ship.physics.anchored = true;
         this.sailTarget = 0;
-        ctx.events?.emit('prompt', { id: 'dock', text: null });
-        ctx.events?.emit('ship:dock', { port: near.port, island: near.island });
+        ctx.events?.emit('prompt', { id: 'landfall', text: null });
+        ctx.events?.emit('ship:dock', { port: port.port, island: port.island });
       }
-    } else if (this._dockNear) {
-      this._dockNear = null;
-      ctx.events?.emit('prompt', { id: 'dock', text: null });
+      return;
     }
+
+    // 2. Otherwise, go ashore on ANY nearby island — the only way onto non-port
+    //    islands (treasure, ruins, wildlife). Drops anchor and puts you on foot
+    //    at the beach.
+    const isl = ctx.world?.getNearestIsland?.(pos);
+    const shoreGap = isl ? isl.distance - isl.island.radius : Infinity;
+    if (isl && shoreGap < 110) {
+      this._landfall = 'shore';
+      ctx.events?.emit('prompt', { id: 'landfall', text: 'E — Drop anchor & go ashore' });
+      if (ctx.input.wasPressed('KeyE')) {
+        this.anchored = true;
+        ship.physics.anchored = true;
+        this.sailTarget = 0;
+        ctx.events?.emit('prompt', { id: 'landfall', text: null });
+        const shore = this._findShorePoint(pos, isl.island);
+        ctx.events?.emit('ship:goashore', { island: isl.island, shore });
+      }
+      return;
+    }
+
+    if (this._landfall) {
+      this._landfall = null;
+      ctx.events?.emit('prompt', { id: 'landfall', text: null });
+    }
+  }
+
+  /** March from the ship toward the island to find the beach; returns a spawn. */
+  _findShorePoint(from, island) {
+    const world = this.ctx.world;
+    const dx = island.center.x - from.x;
+    const dz = island.center.z - from.z;
+    const dist = Math.hypot(dx, dz) || 1;
+    const nx = dx / dist, nz = dz / dist;
+    for (let d = 0; d < dist; d += 3) {
+      const x = from.x + nx * d;
+      const z = from.z + nz * d;
+      if (world.getTerrainHeight(x, z) > 0.4) {
+        // step a couple meters onto the dry beach
+        const sx = x + nx * 2.5;
+        const sz = z + nz * 2.5;
+        const sy = world.getWalkHeight ? world.getWalkHeight(sx, sz) : world.getTerrainHeight(sx, sz);
+        return { point: { x: sx, y: sy, z: sz }, heading: Math.atan2(nx, nz) };
+      }
+    }
+    // fallback: just inside the island edge
+    const x = island.center.x - nx * island.radius * 0.9;
+    const z = island.center.z - nz * island.radius * 0.9;
+    return {
+      point: { x, y: Math.max(world.getTerrainHeight(x, z), 0.3), z },
+      heading: Math.atan2(nx, nz),
+    };
   }
 
   _updateCamera(dt) {

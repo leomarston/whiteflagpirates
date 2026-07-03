@@ -68,19 +68,28 @@ export class ShipPhysics {
     _fwd.set(Math.sin(this.heading), 0, Math.cos(this.heading));
     g.position.addScaledVector(_fwd, this.speed * dt);
 
-    // --- run aground check at the bow ---
+    // --- shoaling & run-aground at the bow ---
+    // Instead of slamming to a stop, drag builds smoothly as the bow enters
+    // water shallower than the draft — the ship eases to rest near the beach.
+    // A real grounding (ramming near-dry land) still stops her and dings the hull.
     this._agroundCooldown -= dt;
     const world = ctx.world;
-    if (world && this.speed > 0.5) {
+    if (world) {
       _p.copy(g.position).addScaledVector(_fwd, type.length * 0.45);
       const ground = world.getTerrainHeight(_p.x, _p.z);
-      if (ground > -type.draft * 0.9) {
-        g.position.addScaledVector(_fwd, -this.speed * dt * 1.2);
-        this.speed *= 0.25;
-        if (this._agroundCooldown <= 0) {
-          this._agroundCooldown = 3;
-          ship.applyDamage?.(SHIP_TUNING.AGROUND_DAMAGE, null);
-          ctx.events?.emit('ship:aground', { ship });
+      const shoalStart = -type.draft * 1.5;
+      if (ground > shoalStart) {
+        const shoal = clamp((ground - shoalStart) / (type.draft * 1.5), 0, 1);
+        this.speed *= Math.exp(-shoal * 3.5 * dt);           // progressive drag
+        if (ground > -type.draft * 0.25 && this.speed > 0.4) {
+          // actually hitting dry-ish land — stop and take the knock
+          g.position.addScaledVector(_fwd, -this.speed * dt);
+          this.speed *= 0.35;
+          if (this._agroundCooldown <= 0) {
+            this._agroundCooldown = 4;
+            ship.applyDamage?.(SHIP_TUNING.AGROUND_DAMAGE, null);
+            ctx.events?.emit('ship:aground', { ship });
+          }
         }
       }
     }
