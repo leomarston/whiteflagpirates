@@ -53,10 +53,12 @@ export class ShipPhysics {
     const windSpeed = weather?.wind.speed ?? 6;
     const rel = wrapAngle(this.heading - windAngle);
     const eff = sailEfficiency(rel);
-    let vmax = type.maxSpeed * this.speedMult * clamp(windSpeed / 9, 0.45, 1.35);
+    // wind matters, but never leaves you crawling — strong floor so she always runs
+    let vmax = type.maxSpeed * this.speedMult * clamp(0.75 + windSpeed / 22, 0.75, 1.45);
     if (this.maxSpeedCap != null) vmax = Math.min(vmax, this.maxSpeedCap);
     const target = this.anchored ? 0 : vmax * eff * ship.sailAmount;
-    const inertia = this.anchored ? 1.6 : type.accel * 0.28;
+    // snappy acceleration so pressing W actually sends her going
+    const inertia = this.anchored ? 2.2 : 0.85 + type.accel * 0.8;
     this.speed = damp(this.speed, target, inertia, dt);
 
     // --- steering (needs way on) ---

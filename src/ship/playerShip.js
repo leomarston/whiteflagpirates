@@ -36,6 +36,8 @@ export class PlayerShip {
       this._rebuild();
       this.applyUpgrades();
       this._docked = false;
+      this.anchored = false;
+      this.sailTarget = 0.55; // get underway immediately — she's already moving
     });
     ctx.events?.on('ship:upgraded', () => this.applyUpgrades());
     // buying a new hull or repainting rebuilds the ship in place
@@ -97,10 +99,10 @@ export class PlayerShip {
     const sailMode = ctx.mode === 'sail';
 
     if (sailMode && !ctx.time.paused) {
-      // sail trim
-      if (input.isDown('KeyW')) this.sailTarget = clamp(this.sailTarget + dt * 0.65, 0, 1);
-      if (input.isDown('KeyS')) this.sailTarget = clamp(this.sailTarget - dt * 0.8, 0, 1);
-      ship.sailAmount = damp(ship.sailAmount, this.anchored ? 0 : this.sailTarget, 2.5, dt);
+      // sail trim — quick to answer the helm
+      if (input.isDown('KeyW')) this.sailTarget = clamp(this.sailTarget + dt * 1.1, 0, 1);
+      if (input.isDown('KeyS')) this.sailTarget = clamp(this.sailTarget - dt * 1.3, 0, 1);
+      ship.sailAmount = damp(ship.sailAmount, this.anchored ? 0 : this.sailTarget, 4, dt);
 
       // rudder with spring return
       let rudderIn = 0;
