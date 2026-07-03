@@ -316,11 +316,16 @@ function buildPort(ctx, world, isl, woodTex) {
     group.add(mesh);
   }
 
-  // two real lights, faded in at night
-  const pierLight = new THREE.PointLight(0xffb45e, 0, 40, 2);
+  // two real lights, faded in at night — warm pools over dock and town
+  const pierLight = new THREE.PointLight(0xffb45e, 0, 60, 1.6);
   pierLight.position.set(pierEnd.x, PIER_Y + 3.4, pierEnd.z);
   group.add(pierLight);
-  const townLight = new THREE.PointLight(0xffb45e, 0, 50, 2);
+  // a mid-pier lantern so the whole walk is lit
+  const midPier = pierStart.clone().lerp(pierEnd, 0.5);
+  const midLight = new THREE.PointLight(0xffb45e, 0, 44, 1.6);
+  midLight.position.set(midPier.x, PIER_Y + 3.4, midPier.z);
+  group.add(midLight);
+  const townLight = new THREE.PointLight(0xffb45e, 0, 70, 1.6);
   townLight.position.set(townCenter.x, townCenter.y + 3.6, townCenter.z);
   group.add(townLight);
 
@@ -345,8 +350,9 @@ function buildPort(ctx, world, isl, woodTex) {
       mats.window.emissiveIntensity = night * 1.6;
       const flicker = 1 + Math.sin(ctx.time.t * 7.3 + def.seed) * 0.08;
       mats.lamp.emissiveIntensity = 0.25 + night * 2.2 * flicker;
-      pierLight.intensity = night * 14 * flicker;
-      townLight.intensity = night * 18 * flicker;
+      pierLight.intensity = night * 22 * flicker;
+      midLight.intensity = night * 16 * flicker;
+      townLight.intensity = night * 26 * flicker;
     },
   };
 }

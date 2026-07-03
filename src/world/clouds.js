@@ -115,7 +115,7 @@ export class Clouds {
 
   update(dt) {
     const { camera, weather, sky } = this.ctx;
-    this.coverage = damp(this.coverage, this._target, 0.25, dt);
+    this.coverage = damp(this.coverage, this._target, 0.4, dt);
 
     const wind = weather?.wind;
     const wx = (wind?.vector.x ?? 2) * 0.00002;

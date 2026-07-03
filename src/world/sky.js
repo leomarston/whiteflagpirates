@@ -62,8 +62,9 @@ void main() {
     col += vec3(0.9, 0.94, 1.0) * star * tw * uNight * smoothstep(0.02, 0.2, h) * (1.0 - uGloom);
   }
 
-  // storm gloom flattens everything toward slate
-  col = mix(col, vec3(0.32, 0.36, 0.41) * (1.0 - uNight * 0.85), uGloom * 0.55);
+  // storm gloom flattens everything toward a bruised slate; darker overhead
+  vec3 slate = mix(vec3(0.30, 0.33, 0.38), vec3(0.10, 0.12, 0.16), pow(clamp(h, 0.0, 1.0), 0.5));
+  col = mix(col, slate * (1.0 - uNight * 0.85), uGloom * 0.82);
   // lightning flash
   col += vec3(0.85, 0.9, 1.0) * uFlash;
 
@@ -74,8 +75,8 @@ void main() {
 // color keyframes by sun elevation
 const STOPS = [
   // e,      zenith,    horizon,   sun,       sunLight,  hemiSky,   hemiGround
-  [-0.30, 0x04070f, 0x0a1120, 0x000000, 0x000000, 0x0d1524, 0x05070a],
-  [-0.12, 0x0a1226, 0x1c2338, 0x201008, 0x000000, 0x141c30, 0x080a10],
+  [-0.30, 0x04070f, 0x0a1120, 0x000000, 0x000000, 0x2a3a58, 0x14161e],
+  [-0.12, 0x0a1226, 0x1c2338, 0x201008, 0x000000, 0x38445e, 0x181a22],
   [0.00, 0x1c2f55, 0xd96a3a, 0xff9a55, 0xff9a55, 0x2c3a5c, 0x1a1410],
   [0.10, 0x2c5586, 0xf5b06a, 0xffd9a0, 0xffc98a, 0x4a628c, 0x2c2820],
   [0.35, 0x336fae, 0xc8dfe8, 0xfff0cd, 0xfff0d8, 0x7d9cc0, 0x4a4a40],
@@ -200,21 +201,21 @@ export class Sky {
 
     // sun light
     sampleStops(e, 4, this.sunLight.color);
-    const sunI = clamp01((e + 0.04) / 0.2) * 2.6 * (1 - gloom * 0.72);
+    const sunI = clamp01((e + 0.04) / 0.2) * 2.6 * (1 - gloom * 0.85);
     this.sunLight.intensity = sunI;
     const target = camera.position;
     this.sunLight.position.copy(target).addScaledVector(this.sunDir, 420);
     this.sunLight.target.position.copy(target);
     this.sunLight.target.updateMatrixWorld();
 
-    // moon light at night
-    this.moonLight.intensity = night * 0.22 * (1 - gloom * 0.8);
+    // moon light at night — enough to read the world by
+    this.moonLight.intensity = night * 0.7 * (1 - gloom * 0.7);
     this.moonLight.position.copy(target).addScaledVector(this.moonDir, 420);
 
-    // hemisphere ambient
+    // hemisphere ambient — keep a cool floor at night so foot travel is legible
     sampleStops(e, 5, this.hemi.color);
     sampleStops(e, 6, this.hemi.groundColor);
-    this.hemi.intensity = lerp(0.14, 0.62, clamp01((e + 0.15) / 0.5)) * (1 - gloom * 0.35);
+    this.hemi.intensity = lerp(0.28, 0.62, clamp01((e + 0.15) / 0.5)) * (1 - gloom * 0.35);
 
     // fog tracks horizon color; weather sets density via this.fogDensityTarget
     const fog = this.ctx.scene.fog;
