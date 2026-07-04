@@ -23,10 +23,10 @@ const GradeShader = {
     tDiffuse: { value: null },
     uTexel: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
     uTime: { value: 0 },
-    uVignette: { value: 0.34 },
-    uSharpen: { value: 0.35 },
-    uAberration: { value: 0.0016 },
-    uGrain: { value: 0.035 },
+    uVignette: { value: 0.32 },
+    uSharpen: { value: 0.3 },
+    uAberration: { value: 0.0006 },
+    uGrain: { value: 0.028 },
     uSaturation: { value: 1.12 },
     uContrast: { value: 1.06 },
     uLift: { value: new THREE.Color(0.015, 0.028, 0.05) },  // teal shadows
@@ -45,7 +45,7 @@ const GradeShader = {
     uniform float uTime, uVignette, uSharpen, uAberration, uGrain, uSaturation, uContrast, uEnabled;
     uniform vec3 uLift, uGain;
 
-    float hash(vec2 p){ p = fract(p * vec2(443.897, 441.423)); p += dot(p, p.yx + 19.19); return fract((p.x + p.y) * p.z + p.x); }
+    float hash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 
     void main() {
       vec2 uv = vUv;
@@ -54,8 +54,8 @@ const GradeShader = {
 
       if (uEnabled < 0.5) { gl_FragColor = texture2D(tDiffuse, uv); return; }
 
-      // chromatic aberration — grows toward the edges
-      vec2 ca = toC * uAberration * (0.4 + r2 * 3.0);
+      // chromatic aberration — subtle, only really present at the far edges
+      vec2 ca = toC * uAberration * (0.15 + r2 * 1.6);
       vec3 col;
       col.r = texture2D(tDiffuse, uv + ca).r;
       col.g = texture2D(tDiffuse, uv).g;

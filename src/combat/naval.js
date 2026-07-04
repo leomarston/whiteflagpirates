@@ -1,7 +1,14 @@
 // Naval combat: cannonballs, broadsides, damage, player gunnery, boarding offers.
+//
+// Combat feel: firing your own broadside and taking hits push a decaying shake
+// signal. It is surfaced two ways so the camera owner can pick either:
+//   • event  'shake' { amount }   (amount 0..1, additive trauma)
+//   • value  ctx.combat.shake     (current smoothed shake, 0..1, decays ~2.4/s)
+// (main.js already turns 'shake', 'cannon:fire' isPlayer, and 'ship:hit' onPlayer
+// into camera trauma; these are additive and capped, so they compound safely.)
 import * as THREE from 'three';
 import { COMBAT } from '../core/constants.js';
-import { clamp, wrapAngle } from '../core/utils.js';
+import { clamp } from '../core/utils.js';
 
 const MAX_BALLS = 48;
 const _v = new THREE.Vector3();
@@ -17,25 +24,29 @@ const AMMO = {
   grape: { dmg: COMBAT.GRAPESHOT_DMG, speed: COMBAT.BALL_SPEED * 0.7, label: 'Grape shot' },
 };
 
+const TRAIL_INTERVAL = 0.028; // s between projectile trail wisps
+
 export class NavalCombat {
   constructor(ctx) {
     this.ctx = ctx;
     this.playerAmmo = 'round';
+    this.shake = 0; // decaying combat shake, readable as ctx.combat.shake
 
     this.balls = [];
     for (let i = 0; i < MAX_BALLS; i++) {
       this.balls.push({
         alive: false, p: new THREE.Vector3(), v: new THREE.Vector3(),
-        type: 'round', firedBy: null, isPlayer: false, life: 0,
+        type: 'round', firedBy: null, isPlayer: false, life: 0, trailAcc: 0,
       });
     }
     this.ballMesh = new THREE.InstancedMesh(
-      new THREE.SphereGeometry(0.17, 6, 6),
-      new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.4, metalness: 0.5 }),
+      new THREE.SphereGeometry(0.18, 8, 8),
+      new THREE.MeshStandardMaterial({ color: 0x14140f, roughness: 0.45, metalness: 0.6 }),
       MAX_BALLS,
     );
     this.ballMesh.count = 0;
     this.ballMesh.frustumCulled = false;
+    this.ballMesh.castShadow = false;
     ctx.scene.add(this.ballMesh);
 
     this._pending = [];   // staggered per-cannon shots
@@ -48,6 +59,28 @@ export class NavalCombat {
         ship.sink(true);
       }
     });
+
+    // A sunk ship's magazine cooks off — punctuate the kill (near camera only).
+    ctx.events?.on('ship:sunk', ({ ship }) => this._onSunk(ship));
+  }
+
+  _addShake(amount) {
+    this.shake = Math.min(1, this.shake + amount);
+    this.ctx.events?.emit('shake', { amount });
+  }
+
+  _onSunk(ship) {
+    if (!ship?.group) return;
+    const p = ship.position;
+    const cam = this.ctx.camera?.position;
+    const dist = cam ? cam.distanceTo(p) : 0;
+    if (dist > 1400) return; // don't spend particles off-screen
+    const len = ship.type?.length ?? 20;
+    const wy = (this.ctx.ocean?.getHeight(p.x, p.z) ?? p.y) + len * 0.14;
+    _v.set(p.x, wy, p.z);
+    this.ctx.effects?.explosion(_v, clamp(len / 22, 0.85, 2.4));
+    this.ctx.effects?.woodBurst?.(_v, 8);
+    if (dist < 260) this._addShake(clamp(0.5 - dist / 700, 0.12, 0.5));
   }
 
   reloadTimeFor(ship) {
@@ -73,10 +106,12 @@ export class NavalCombat {
     for (let i = 0; i < points.length; i++) {
       this._pending.push({
         ship, side, type, targetPoint: targetPoint ? targetPoint.clone() : null,
-        local: points[i], delay: i * (0.12 + Math.random() * 0.1), spreadRad,
+        local: points[i], delay: i * (0.11 + Math.random() * 0.09), spreadRad,
         isPlayer: ship.isPlayer,
       });
     }
+    // recoil kick when the captain pulls the lanyard on their own broadside
+    if (ship.isPlayer) this._addShake(0.18 + Math.min(points.length, 10) * 0.014);
     return true;
   }
 
@@ -116,8 +151,11 @@ export class NavalCombat {
     ball.firedBy = ship;
     ball.isPlayer = ship.isPlayer;
     ball.life = COMBAT.MAX_RANGE / ammo.speed + 2;
+    ball.trailAcc = 0;
 
-    this.ctx.effects?.muzzleFlash(_v, _dir);
+    // cannon flash scales with ship (pistols elsewhere pass the default 1)
+    const mscale = clamp(1.1 + (ship.type?.length ?? 20) / 70, 1.1, 1.9);
+    this.ctx.effects?.muzzleFlash(_v, _dir, mscale);
     this.ctx.events?.emit('cannon:fire', { ship, pos: _v.clone(), isPlayer: ship.isPlayer });
   }
 
@@ -141,6 +179,9 @@ export class NavalCombat {
 
   update(dt) {
     const ctx = this.ctx;
+
+    // shake decays toward rest
+    if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 2.4);
 
     // staggered shots
     for (let i = this._pending.length - 1; i >= 0; i--) {
@@ -192,10 +233,13 @@ export class NavalCombat {
             hit._lastHitByPlayer = true;
           }
           hit.applyDamage(dmg, ball.p);
-          ctx.effects?.woodBurst(ball.p, 6);
-          ctx.effects?.sparks(ball.p, 4);
+          // punchy impact feedback
+          ctx.effects?.woodBurst(ball.p, 8);
+          ctx.effects?.sparks(ball.p, 8);
+          const onPlayer = hit === ctx.playerShip?.ship;
+          if (onPlayer) this._addShake(clamp(0.15 + dmg / hit.hullMax * 1.3, 0.15, 0.5));
           ctx.events?.emit('ship:hit', {
-            ship: hit, byPlayer: ball.isPlayer, onPlayer: hit === ctx.playerShip?.ship,
+            ship: hit, byPlayer: ball.isPlayer, onPlayer,
           });
         }
       }
@@ -205,10 +249,11 @@ export class NavalCombat {
         if (ball.p.y <= waterY) {
           dead = true;
           _v.set(ball.p.x, waterY, ball.p.z);
-          ctx.effects?.splash(_v, 0.9);
+          ctx.effects?.splash(_v, 1.05);
         } else if (ctx.world && ball.p.y <= ctx.world.getTerrainHeight(ball.p.x, ball.p.z)) {
           dead = true;
-          ctx.effects?.woodBurst(ball.p, 3);
+          ctx.effects?.woodBurst(ball.p, 4);
+          ctx.effects?.sparks(ball.p, 5);
         }
       }
 
@@ -216,6 +261,14 @@ export class NavalCombat {
         ball.alive = false;
         continue;
       }
+
+      // smoke tracer trailing the shot
+      ball.trailAcc += dt;
+      if (ball.trailAcc >= TRAIL_INTERVAL) {
+        ball.trailAcc = 0;
+        ctx.effects?.trail?.(ball.p);
+      }
+
       _m.compose(ball.p, _q, _s);
       this.ballMesh.setMatrixAt(n++, _m);
     }

@@ -1,14 +1,18 @@
-// Cloud deck — two drifting fbm-noise layers that read as volume from below.
+// Cloud deck — a projected cloud-dome that reads as a volumetric layer from
+// below. View rays are cast onto two cloud-height planes (so clouds converge
+// to the horizon in true perspective), shaped by multi-octave fbm with domain
+// warp, lit with sunward silver-lined edges over shadowed bases, drifting on
+// the wind and boiling in storms. One draw call, no per-frame allocation.
 import * as THREE from 'three';
 import { clamp01, damp, fbm2, SimplexNoise } from '../core/utils.js';
 
+const DOME_RADIUS = 12000;
+
 const cloudVertex = /* glsl */ `
-varying vec2 vUv;
-varying float vFogDepth;
+varying vec3 vDir;
 void main() {
-  vUv = uv;
+  vDir = normalize(position);
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  vFogDepth = -mv.z;
   gl_Position = projectionMatrix * mv;
 }
 `;
@@ -16,72 +20,122 @@ void main() {
 const cloudFragment = /* glsl */ `
 precision highp float;
 uniform sampler2D uNoise;
-uniform float uCoverage;   // 0..1
-uniform float uGloom;      // 0..1 storm darkness
-uniform vec3 uSunTint;
-uniform vec2 uScroll;
-uniform float uFade;       // radial fade to horizon
-varying vec2 vUv;
-varying float vFogDepth;
+uniform vec3 uCamPos;
+uniform vec3 uSunDir;
+uniform vec3 uSunTint;   // warm sunlit / silver-lining color
+uniform vec3 uBaseTint;  // shadowed base color (sky-tinted grey)
+uniform float uCoverage; // 0..1
+uniform float uGloom;    // 0..1 storm darkness
+uniform float uNight;    // 0..1
+uniform vec2 uWind;      // accumulated wind drift, world meters
+uniform float uTime;     // seconds
+varying vec3 vDir;
+
+float ntex(vec2 p) { return texture2D(uNoise, p).r; }
+
+// 3-octave fbm in normalized (tiling) space, ~0..1
+float fbm3(vec2 p) {
+  float f = ntex(p) * 0.5;
+  f += ntex(p * 2.03 + 1.7) * 0.3;
+  f += ntex(p * 4.11 + 4.3) * 0.2;
+  return f;
+}
+
+// One cloud layer: project the ray onto a plane at the given height, sample fbm.
+vec4 cloudLayer(vec3 dir, float height, float scale, float wDrift,
+                float th, float rich) {
+  float t = height / max(dir.y, 1e-4);
+  vec2 world = uCamPos.xz + dir.xz * t + uWind * wDrift;
+  vec2 wp = world * scale;
+
+  // domain warp -> billowy, evolving shapes (churns harder in storms)
+  float ev = uTime * (0.003 + uGloom * 0.012);
+  vec2 warp = vec2(ntex(wp * 0.55 + ev), ntex(wp * 0.55 + 5.2 - ev)) - 0.5;
+  wp += warp * (0.22 + uGloom * 0.14);
+
+  float n = fbm3(wp);
+  float a = smoothstep(th, th + 0.20, n);
+  if (a <= 0.002) return vec4(0.0);
+
+  // silver lining: peek toward the sun; a thinner neighbour => this edge is lit
+  vec2 sdir = normalize(uSunDir.xz + vec2(1e-4, 0.0));
+  float nS = rich > 0.5 ? fbm3(wp + sdir * 0.85) : ntex(wp + sdir * 0.85);
+  float lit = clamp((n - nS) * 2.6 + 0.28, 0.0, 1.0);
+
+  // dense cores read darker (thick, self-shadowed); edges catch the light
+  vec3 shade = mix(uBaseTint, uBaseTint * 0.42, smoothstep(0.5, 0.95, n));
+  vec3 col = mix(shade, uSunTint, lit * (1.0 - uGloom * 0.6));
+
+  // night: dark silhouettes with a faint cool moon-lit rim
+  col = mix(col, col * 0.16 + vec3(0.05, 0.06, 0.09) * lit, uNight * 0.85);
+
+  // horizon + distance fade so the deck melts into atmospheric haze
+  a *= smoothstep(0.015, 0.11, dir.y);
+  a *= exp(-t * 0.000024);
+  return vec4(col, a);
+}
 
 void main() {
-  vec2 uv = vUv * 6.0 + uScroll;
-  float n = texture2D(uNoise, uv).r * 0.62
-          + texture2D(uNoise, uv * 2.7 + 13.1).r * 0.26
-          + texture2D(uNoise, uv * 7.3 + 41.7).r * 0.12;
+  vec3 dir = normalize(vDir);
+  if (dir.y < 0.012) discard;
 
-  float th = mix(0.78, 0.18, uCoverage);
-  float a = smoothstep(th, th + 0.3, n);
+  float thLo = mix(0.60, 0.28, uCoverage);
+  float thHi = mix(0.66, 0.36, uCoverage);
 
-  // darker, flatter bases as gloom rises
-  vec3 bright = uSunTint;
-  vec3 dark = mix(vec3(0.55, 0.58, 0.63), vec3(0.16, 0.18, 0.22), uGloom);
-  vec3 col = mix(dark, bright, pow(n, 1.6) * (1.0 - uGloom * 0.85));
+  vec4 lo = cloudLayer(dir, 1150.0, 0.00017, 3.0, thLo, 1.0);
+  vec4 hi = cloudLayer(dir, 2100.0, 0.00009, 2.0, thHi, 0.0);
 
-  // fade at the disc rim so the deck melts into haze
-  float rim = 1.0 - smoothstep(0.55, 1.0, length(vUv - 0.5) * 2.0);
-  a *= rim * uFade;
+  // composite the lower deck over the higher, thinner deck
+  vec3 col = mix(hi.rgb, lo.rgb, lo.a);
+  float a = lo.a + hi.a * (1.0 - lo.a);
+  a *= mix(0.9, 1.0, uGloom);
+  if (a <= 0.003) discard;
 
-  gl_FragColor = vec4(col, a * mix(0.85, 0.98, uGloom));
+  gl_FragColor = vec4(col, a);
 }
 `;
+
+const _grey = new THREE.Color(0x9aa2ad);
 
 export class Clouds {
   constructor(ctx) {
     this.ctx = ctx;
     this.coverage = 0.3;
     this._target = 0.3;
-    this._scroll = new THREE.Vector2();
+    this._wind = new THREE.Vector2();
+
+    // scratch (no per-frame allocation)
+    this._sunTint = new THREE.Color(0xfff2dc);
+    this._baseTint = new THREE.Color(0x9aa2ad);
 
     const noise = this._buildNoiseTexture();
-    this.layers = [];
-    const heights = [980, 1350];
-    for (let i = 0; i < heights.length; i++) {
-      const uniforms = {
-        uNoise: { value: noise },
-        uCoverage: { value: this.coverage },
-        uGloom: { value: 0 },
-        uSunTint: { value: new THREE.Color(0xfff4e0) },
-        uScroll: { value: new THREE.Vector2(i * 0.37, i * 0.61) },
-        uFade: { value: 1 - i * 0.25 },
-      };
-      const mat = new THREE.ShaderMaterial({
-        vertexShader: cloudVertex,
-        fragmentShader: cloudFragment,
-        uniforms,
-        transparent: true,
-        depthWrite: false,
-        fog: false,
-      });
-      const geo = new THREE.PlaneGeometry(24000, 24000);
-      geo.rotateX(Math.PI / 2); // face downward toward the camera
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.y = heights[i];
-      mesh.renderOrder = -5;
-      mesh.frustumCulled = false;
-      ctx.scene.add(mesh);
-      this.layers.push({ mesh, uniforms, speed: 1 - i * 0.4 });
-    }
+    this.uniforms = {
+      uNoise: { value: noise },
+      uCamPos: { value: new THREE.Vector3() },
+      uSunDir: { value: new THREE.Vector3(0.4, 0.7, 0.5) },
+      uSunTint: { value: this._sunTint },
+      uBaseTint: { value: this._baseTint },
+      uCoverage: { value: this.coverage },
+      uGloom: { value: 0 },
+      uNight: { value: 0 },
+      uWind: { value: this._wind },
+      uTime: { value: 0 },
+    };
+
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: cloudVertex,
+      fragmentShader: cloudFragment,
+      uniforms: this.uniforms,
+      side: THREE.BackSide,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    });
+    const geo = new THREE.SphereGeometry(DOME_RADIUS, 32, 16);
+    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = -5;
+    ctx.scene.add(this.mesh);
   }
 
   _buildNoiseTexture() {
@@ -117,26 +171,33 @@ export class Clouds {
     const { camera, weather, sky } = this.ctx;
     this.coverage = damp(this.coverage, this._target, 0.4, dt);
 
+    // wind drift accumulates in world meters (gained so it reads at cloud scale)
     const wind = weather?.wind;
-    const wx = (wind?.vector.x ?? 2) * 0.00002;
-    const wz = (wind?.vector.z ?? 1) * 0.00002;
-    this._scroll.x += wx * dt * 60;
-    this._scroll.y += wz * dt * 60;
+    this._wind.x += (wind?.vector.x ?? 3) * dt * 3.0;
+    this._wind.y += (wind?.vector.z ?? 1) * dt * 3.0;
 
     const gloom = clamp01(weather?.gloom ?? 0);
-    for (const layer of this.layers) {
-      layer.mesh.position.x = camera.position.x;
-      layer.mesh.position.z = camera.position.z;
-      const u = layer.uniforms;
-      u.uCoverage.value = this.coverage;
-      u.uGloom.value = gloom;
-      u.uScroll.value.set(
-        layer.uniforms.uScroll.value.x + wx * dt * 60 * layer.speed,
-        layer.uniforms.uScroll.value.y + wz * dt * 60 * layer.speed,
-      );
-      if (sky?.colors) {
-        u.uSunTint.value.copy(sky.colors.sun).lerp(sky.colors.horizon, 0.35);
-      }
+    const sunDir = sky?.sunDir;
+    const sunY = sunDir?.y ?? 0.6;
+    const night = 1 - clamp01((sunY + 0.12) / 0.22);
+
+    const u = this.uniforms;
+    u.uCamPos.value.copy(camera.position);
+    u.uCoverage.value = this.coverage;
+    u.uGloom.value = gloom;
+    u.uNight.value = night;
+    u.uTime.value = this.ctx.time?.t ?? 0;
+    if (sunDir) u.uSunDir.value.copy(sunDir);
+
+    // keep the cloud dome centred on the camera; projection re-anchors to world
+    this.mesh.position.copy(camera.position);
+
+    // shade from the current sky palette
+    if (sky?.colors) {
+      // warm sunlit tops / silver lining
+      this._sunTint.copy(sky.colors.sun).lerp(sky.colors.horizon, 0.28);
+      // cool grey shadowed base, darkened as the storm rolls in
+      this._baseTint.copy(sky.colors.horizon).lerp(_grey, 0.55).multiplyScalar(1 - gloom * 0.55);
     }
   }
 }
