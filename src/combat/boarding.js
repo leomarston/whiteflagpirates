@@ -31,6 +31,15 @@ export class Boarding {
     this._restore = null;
     this._t = 0;
     this._settleT = 0;         // brief "grapple" beat before control returns
+
+    // If the captain loses his ship or respawns mid-boarding, tear the melee
+    // down cleanly — otherwise the walk surface, the hostiles, and the ship pin
+    // would leak and the rebuilt ship would be yanked back to the grapple spot
+    // every frame (a soft-lock until the safety timeout).
+    ctx.events?.on('ship:sunk', ({ ship }) => {
+      if (this.active && ship === this.ctx.playerShip?.ship) this._abort();
+    });
+    ctx.events?.on('player:respawn', () => { if (this.active) this._abort(); });
   }
 
   /** Can we run the playable melee for this prize right now? */
@@ -99,6 +108,9 @@ export class Boarding {
     const faceEnemy = Math.atan2(_right.x, _right.z);
     ctx.setMode('foot');
     ctx.character.spawnAt(_pt, faceEnemy);
+    // board hale — sailing never regenerates HP, so a captain who last stepped
+    // ashore wounded would otherwise be repelled before the fight even starts.
+    if (ctx.character) ctx.character.hp = ctx.character.hpMax;
 
     // muster the prize's surviving hands across her deck
     const n = clamp(Math.round((ship.crewCount ?? 6) * 0.6), 2, MAX_HOSTILES);
@@ -116,6 +128,7 @@ export class Boarding {
       if (h) { h.dmg = HOSTILE_DMG.slice(); this._hostiles.push(h); }
     }
 
+    ship._boarded = true;      // freezes her AI (no steering, no gunnery) while grappled
     this.active = true;
     this.ship = ship;
     this._t = 0;
@@ -177,6 +190,8 @@ export class Boarding {
     const ps = ctx.playerShip?.ship;
     if (ps) { ps.physics.speed = 0; if (this._restore) ps.physics.heading = this._restore.pHeading; }
 
+    if (ship) ship._boarded = false;   // hand her back to the fleet AI
+
     if (victory) {
       // the prize is scuttled behind you as you sail off richer
       if (ship?.alive && !ship.sinking) {
@@ -192,11 +207,33 @@ export class Boarding {
         ship.hull = Math.min(ship.hullMax, ship.hull + ship.hullMax * 0.12); // no longer instantly re-boardable
         ship._boardable = false;
       }
-      // give the captain a moment to lick his wounds
-      if (ctx.character) ctx.character.hp = Math.max(ctx.character.hp, ctx.character.hpMax * 0.35);
-      ctx.crew?.applyBoardingOutcome?.(ship, false, { heavy: true });
+      if (ctx.character?.alive) {
+        // give the captain a moment to lick his wounds
+        ctx.character.hp = Math.max(ctx.character.hp, ctx.character.hpMax * 0.35);
+        ctx.crew?.applyBoardingOutcome?.(ship, false, { heavy: true });
+      }
+      // if the captain actually fell, the death/respawn flow owns the outcome —
+      // don't stack a "Repelled!" modal on top of the death screen.
     }
 
+    this.ship = null;
+    this._pin = null;
+    this._restore = null;
+  }
+
+  /** Tear the melee down without resolving an outcome — used when the player
+   *  loses his ship or respawns mid-boarding (the death/respawn flow owns it). */
+  _abort() {
+    const ctx = this.ctx;
+    this.active = false;
+    for (const h of this._hostiles) {
+      if (!h) continue;
+      h.alive = false; h.hp = 0;
+      this._despawn(h);
+    }
+    this._hostiles.length = 0;
+    if (this._surface) { ctx.world?.removeDynamicSurface?.(this._surface); this._surface = null; }
+    if (this.ship) this.ship._boarded = false;
     this.ship = null;
     this._pin = null;
     this._restore = null;

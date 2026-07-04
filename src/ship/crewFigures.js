@@ -209,6 +209,10 @@ export class CrewFigures {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    // InstancedMesh keeps its instanceMatrix/instanceColor as GPU buffers on the
+    // mesh itself (not the geometry), so geometry.dispose() alone leaks them —
+    // dispose the mesh to free them as AI ships spawn and despawn over a session.
+    this.mesh?.dispose?.();
     this._geo?.dispose?.();
     this._mat?.dispose?.();
     this.mesh = null;

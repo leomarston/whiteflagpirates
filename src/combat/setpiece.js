@@ -66,9 +66,24 @@ export class NavalSetpiece {
     }
   }
 
+  /** Lift the atmospheric fog we forced for the telegraph, restoring the sky to
+   *  whatever it was before she was rumoured. Safe to call unconditionally. */
+  _clearForced() {
+    if (!this._forcedCond) return;
+    this._forcedCond = false;
+    this.ctx.weather?.forceCondition?.(this._prevCond ?? 'fair');
+  }
+
   /** Reset all per-voyage state — called on every game:start. */
   reset() {
-    // the world is torn down on a new game; just drop our references
+    this._clearForced();
+    // don't leave a live legend orphaned in the fleet if a new game begins
+    // without a full reload — pull her from the world before dropping refs.
+    if (this.entry) {
+      const i = this.ctx.enemies?.entries?.indexOf(this.entry) ?? -1;
+      if (i >= 0) this.ctx.enemies.entries.splice(i, 1);
+    }
+    if (this.ship) this.ctx.ships?.remove?.(this.ship);
     this.ship = null;
     this.entry = null;
     this.cooldown = 0;
@@ -109,6 +124,7 @@ export class NavalSetpiece {
     this._pending = TELEGRAPH_S;
     // a cold fog bank rolls in as the atmosphere; harmless if weather is absent
     if (ctx.weather?.forceCondition) {
+      this._prevCond = ctx.weather.condition ?? 'fair';
       ctx.weather.forceCondition('overcast');
       this._forcedCond = true;
     }
@@ -126,6 +142,7 @@ export class NavalSetpiece {
     if (!enemies?.entries || !ctx.ships?.createShip || !p) {
       // conditions collapsed mid-telegraph — stand her down without penalty
       this.cooldown = COOLDOWN_ESCAPE;
+      this._clearForced();
       return;
     }
 
@@ -148,6 +165,7 @@ export class NavalSetpiece {
     });
     if (!ship) {
       this.cooldown = COOLDOWN_ESCAPE;
+      this._clearForced();
       return;
     }
     ship.physics.placeAt(x, z, Math.atan2(p.x - x, p.z - z));
@@ -185,6 +203,7 @@ export class NavalSetpiece {
       return;
     }
     // whatever happens next, our references are stale the moment she founders
+    this._clearForced();
     this.ship = null;
     this.entry = null;
     this._pending = 0;
@@ -221,7 +240,7 @@ export class NavalSetpiece {
       if (this._pending <= 0) {
         this._pending = 0;
         if (ctx.mode === 'sail') this._spawnLegend();
-        else this.cooldown = COOLDOWN_ESCAPE;   // player left the water; stand down
+        else { this.cooldown = COOLDOWN_ESCAPE; this._clearForced(); }   // player left the water; stand down
       }
       return;
     }
@@ -237,6 +256,7 @@ export class NavalSetpiece {
             text: `${LEGEND.name} melts back into the fog. Another day, then.`,
             kind: 'info',
           });
+          this._clearForced();
           this.ship = null;
           this.entry = null;
           this.cooldown = COOLDOWN_ESCAPE;

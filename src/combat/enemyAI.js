@@ -145,6 +145,9 @@ export class EnemyFleet {
 
   _updateBrain(entry, dt) {
     const { ship, brain } = entry;
+    // a ship lashed alongside for a boarding melee is frozen — the boarding
+    // system pins her hull and she must not steer or fire while grappled.
+    if (ship._boarded) return;
     const ctx = this.ctx;
     const ps = ctx.playerShip?.ship;
     const p = ship.position;

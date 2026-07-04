@@ -80,6 +80,14 @@ export class SwordCombat {
         this._hideFocusOverlay();
       }
     });
+    // On death the character's update early-returns before sword.update runs, so
+    // the focus reticle would freeze over the death screen — hide it explicitly.
+    ctx.events?.on('player:death', () => {
+      this.focusTarget = null;
+      this.ch.focusTarget = null;
+      this._finisherReady = false;
+      this._hideFocusOverlay();
+    });
   }
 
   get attacking() { return this.attackT >= 0; }
