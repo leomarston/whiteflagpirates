@@ -105,6 +105,7 @@ export class UI {
 
   _boardingOffer(ship) {
     this.openScreen('boarding', (panel) => {
+      panel.classList.add('centered');
       panel.insertAdjacentHTML('beforeend', `
         <h2>Boarding Action</h2>
         <div class="sub">${ship.name} is crippled and within grappling range.</div>
@@ -130,6 +131,7 @@ export class UI {
 
   _boardingResult({ victory, lootGold, casualties }) {
     this.openScreen('boarding-result', (panel) => {
+      panel.classList.add('centered');
       panel.insertAdjacentHTML('beforeend', `
         <h2>${victory ? 'Prize Taken!' : 'Repelled!'}</h2>
         <div class="sub">${victory

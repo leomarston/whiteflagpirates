@@ -88,9 +88,11 @@ export class Trading {
           <span class="money">Purse: ${ctx.state.data.gold.toLocaleString('en-US')} s</span>
           <span>Hold: ${ctx.economy?.cargoUsed() ?? 0} / ${ctx.economy?.cargoCapacity() ?? 0}</span>
         </div>
-        <table class="trade">
-          <tr><th>Good</th><th>Buy</th><th>Sell</th><th>Aboard</th><th></th><th></th></tr>
-        </table>
+        <div class="trade-wrap">
+          <table class="trade">
+            <tr><th>Good</th><th>Buy</th><th>Sell</th><th>Aboard</th><th></th><th></th></tr>
+          </table>
+        </div>
       `;
       panel.querySelector('.close-x').onclick = () => this.ui.closeScreen();
       const table = panel.querySelector('table');

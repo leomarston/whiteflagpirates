@@ -30,6 +30,10 @@ export class PlayerShip {
     this._dockNear = null;
     this._docked = false;
 
+    // cinematic follow state (smoothed each frame)
+    this._lookAhead = new THREE.Vector3();
+    this._camRoll = 0;
+
     this._rebuild();
 
     ctx.events?.on('game:start', () => {
@@ -242,11 +246,16 @@ export class PlayerShip {
     const { ctx, ship } = this;
     const cam = ctx.camera;
     const g = ship.group;
+    const phys = ship.physics;
 
-    const yaw = ship.physics.heading + this._camYaw;
-    // aiming pulls the camera abeam for a gun-deck view
-    let dist = this._camDist;
+    const yaw = phys.heading + this._camYaw;
+    const spd = phys.speed;
+    const speedFrac = clamp(spd / (ship.type.maxSpeed * 1.15), 0, 1);
+
+    // she pulls the camera back a touch as she takes up speed — a sense of rush
+    let dist = this._camDist * (1 + speedFrac * 0.12);
     let pitch = this._camPitch;
+    // aiming pulls the camera abeam for a gun-deck view
     if (this.aimSide) {
       dist = Math.min(dist, 46);
       pitch = Math.max(pitch, 0.18);
@@ -263,16 +272,34 @@ export class PlayerShip {
     const waterY = ctx.ocean ? ctx.ocean.getHeight(_camPos.x, _camPos.z) : 0;
     if (_camPos.y < waterY + 1.6) _camPos.y = waterY + 1.6;
 
+    // spring-damped follow (frame-rate independent)
     const k = 1 - Math.exp(-dt * 7);
     cam.position.lerp(_camPos, k);
+
+    // look-ahead: lead the bow with speed and bank the aim into the turn (yaw
+    // rate), so the camera anticipates where she's driving, not just her stern.
+    const sh = Math.sin(phys.heading), cs = Math.cos(phys.heading);
+    const swing = phys.yawRate * spd;
+    const leadX = clamp(sh * spd * 0.2 + cs * swing * 0.4, -11, 11);
+    const leadZ = clamp(cs * spd * 0.2 - sh * swing * 0.4, -11, 11);
+    this._lookAhead.x = damp(this._lookAhead.x, leadX, 2.4, dt);
+    this._lookAhead.z = damp(this._lookAhead.z, leadZ, 2.4, dt);
+
     _camTarget.copy(g.position);
+    _camTarget.x += this._lookAhead.x;
+    _camTarget.z += this._lookAhead.z;
     _camTarget.y += ship.type.freeboard + 3.2;
     cam.lookAt(_camTarget);
 
-    // spyglass fov
-    const targetFov = this._spyglass ? 20 : this._baseFov;
-    if (Math.abs(cam.fov - targetFov) > 0.1) {
-      cam.fov = lerp(cam.fov, targetFov, 1 - Math.exp(-dt * 9));
+    // gentle horizon roll tied to her heel — the deck leans, the world tilts
+    this._camRoll = damp(this._camRoll, phys._heel * 0.32, 3, dt);
+    cam.rotateZ(this._camRoll);
+
+    // FOV: widens with speed (faster = wider); spyglass overrides to a tight zoom
+    const baseFov = ctx.state?.settings?.fov ?? this._baseFov ?? 60;
+    const targetFov = this._spyglass ? 20 : baseFov + speedFrac * 11;
+    if (Math.abs(cam.fov - targetFov) > 0.05) {
+      cam.fov = lerp(cam.fov, targetFov, 1 - Math.exp(-dt * (this._spyglass ? 9 : 4)));
       cam.updateProjectionMatrix();
     }
   }

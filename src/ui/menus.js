@@ -7,6 +7,17 @@ export class Menus {
     this._buildTitle();
     this._buildDeath();
     this._waveT = 0;
+    // stable starfield (fractional positions, generated once)
+    this._stars = [];
+    for (let i = 0; i < 70; i++) {
+      this._stars.push({
+        x: Math.random(),
+        y: Math.random() * 0.56,
+        r: 0.4 + Math.random() * 1.1,
+        tw: Math.random() * Math.PI * 2,
+        sp: 0.6 + Math.random() * 1.8,
+      });
+    }
 
     ctx.events?.on('player:death', () => this._showDeath());
     ctx.events?.on('game:start', () => {
@@ -19,14 +30,17 @@ export class Menus {
     this.title.id = 'title-screen';
     this.title.innerHTML = `
       <canvas id="title-sea"></canvas>
-      <div class="flagmark">⚑</div>
-      <h1>WhiteFlagPirates</h1>
-      <div class="tagline">No masters. No surrender. The Verge is free.</div>
-      <div id="title-menu">
-        <button class="primary" data-act="new">New Voyage</button>
-        <button data-act="continue">Continue</button>
-        <button data-act="settings">Settings</button>
-        <button data-act="credits">Credits</button>
+      <div class="title-lockup">
+        <div class="flagmark">⚑</div>
+        <h1>WhiteFlagPirates</h1>
+        <div class="title-rule"></div>
+        <div class="tagline">No masters. No surrender. The Verge is free.</div>
+        <div id="title-menu">
+          <button class="primary" data-act="new">New Voyage</button>
+          <button data-act="continue">Continue</button>
+          <button data-act="settings">Settings</button>
+          <button data-act="credits">Credits</button>
+        </div>
       </div>
       <div class="version">the Meridian Verge · v0.1</div>
     `;
@@ -117,10 +131,10 @@ export class Menus {
             <option value="medium">Medium — trade winds</option>
             <option value="high">High — full sail</option>
           </select></div>
-        <div class="set-row"><label>Master volume</label><input type="range" id="set-master" min="0" max="1" step="0.05"></div>
-        <div class="set-row"><label>Music</label><input type="range" id="set-music" min="0" max="1" step="0.05"></div>
-        <div class="set-row"><label>Effects</label><input type="range" id="set-sfx" min="0" max="1" step="0.05"></div>
-        <div class="set-row"><label>Field of view</label><input type="range" id="set-fov" min="45" max="90" step="1"></div>
+        <div class="set-row"><label>Master volume</label><span class="set-ctl"><input type="range" id="set-master" min="0" max="1" step="0.05"><span class="set-val" id="val-master"></span></span></div>
+        <div class="set-row"><label>Music</label><span class="set-ctl"><input type="range" id="set-music" min="0" max="1" step="0.05"><span class="set-val" id="val-music"></span></span></div>
+        <div class="set-row"><label>Effects</label><span class="set-ctl"><input type="range" id="set-sfx" min="0" max="1" step="0.05"><span class="set-val" id="val-sfx"></span></span></div>
+        <div class="set-row"><label>Field of view</label><span class="set-ctl"><input type="range" id="set-fov" min="45" max="90" step="1"><span class="set-val" id="val-fov"></span></span></div>
         <div class="set-row"><label>Invert look Y</label><input type="checkbox" id="set-invert"></div>
       `);
       const q = panel.querySelector('#set-quality');
@@ -130,19 +144,24 @@ export class Menus {
         ctx.engine.setQuality(q.value);
         ctx.state.saveSettings();
       };
-      const bind = (id, key, fn) => {
+      const bind = (id, key, fn, fmt) => {
         const el = panel.querySelector(id);
+        const out = panel.querySelector(id.replace('#set-', '#val-'));
         el.value = s[key];
+        const show = () => { if (out) out.textContent = fmt ? fmt(s[key]) : s[key]; };
+        show();
         el.oninput = () => {
           s[key] = parseFloat(el.value);
           fn?.(s[key]);
+          show();
           ctx.state.saveSettings();
         };
       };
-      bind('#set-master', 'volumeMaster', () => ctx.audio?.setVolumes?.(s));
-      bind('#set-music', 'volumeMusic', () => ctx.audio?.setVolumes?.(s));
-      bind('#set-sfx', 'volumeSfx', () => ctx.audio?.setVolumes?.(s));
-      bind('#set-fov', 'fov', (v) => ctx.engine.setFov(v));
+      const pct = (v) => `${Math.round(v * 100)}%`;
+      bind('#set-master', 'volumeMaster', () => ctx.audio?.setVolumes?.(s), pct);
+      bind('#set-music', 'volumeMusic', () => ctx.audio?.setVolumes?.(s), pct);
+      bind('#set-sfx', 'volumeSfx', () => ctx.audio?.setVolumes?.(s), pct);
+      bind('#set-fov', 'fov', (v) => ctx.engine.setFov(v), (v) => `${Math.round(v)}°`);
       const inv = panel.querySelector('#set-invert');
       inv.checked = !!s.invertY;
       inv.onchange = () => { s.invertY = inv.checked; ctx.state.saveSettings(); };
@@ -156,7 +175,7 @@ export class Menus {
     this.ui.openScreen('credits', (panel) => {
       panel.insertAdjacentHTML('beforeend', `
         <h2>${credits.title}</h2>
-        <div style="max-width:520px;line-height:1.9;font-size:15px;font-style:italic;color:var(--parchment-dark)">
+        <div class="credits-body">
           ${credits.lines.map((l) => `<p>${l}</p>`).join('')}
         </div>
       `);
@@ -168,37 +187,84 @@ export class Menus {
     if (this.title.classList.contains('hidden')) return;
     this._waveT += dt;
     const c = this.seaCanvas;
-    if (c.width !== c.clientWidth) {
+    if (c.width !== c.clientWidth || c.height !== c.clientHeight) {
       c.width = c.clientWidth || window.innerWidth;
       c.height = c.clientHeight || window.innerHeight;
     }
     const g = c.getContext('2d');
-    g.clearRect(0, 0, c.width, c.height);
-    const horizon = c.height * 0.68;
-    // moon glow
-    const mg = g.createRadialGradient(c.width * 0.72, c.height * 0.2, 8, c.width * 0.72, c.height * 0.2, 130);
-    mg.addColorStop(0, 'rgba(232,228,218,0.8)');
+    const W = c.width, H = c.height;
+    g.clearRect(0, 0, W, H);
+    const horizon = H * 0.68;
+    const t = this._waveT;
+
+    // sky gradient
+    const sky = g.createLinearGradient(0, 0, 0, horizon);
+    sky.addColorStop(0, 'rgba(9,18,30,0.85)');
+    sky.addColorStop(0.7, 'rgba(16,30,44,0.5)');
+    sky.addColorStop(1, 'rgba(26,44,60,0.25)');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, W, horizon);
+
+    // stars (twinkling)
+    for (const st of this._stars) {
+      const sy = st.y * horizon;
+      if (sy > horizon - 6) continue;
+      const a = 0.35 + 0.4 * (0.5 + 0.5 * Math.sin(t * st.sp + st.tw));
+      g.globalAlpha = a;
+      g.fillStyle = '#e8e4da';
+      g.beginPath();
+      g.arc(st.x * W, sy, st.r, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.globalAlpha = 1;
+
+    // moon glow + disc
+    const mx = W * 0.72, my = H * 0.2;
+    const mg = g.createRadialGradient(mx, my, 8, mx, my, 150);
+    mg.addColorStop(0, 'rgba(236,232,222,0.85)');
     mg.addColorStop(0.12, 'rgba(220,225,235,0.35)');
     mg.addColorStop(1, 'rgba(220,225,235,0)');
     g.fillStyle = mg;
-    g.fillRect(0, 0, c.width, c.height);
-    // sea bands
-    for (let i = 0; i < 14; i++) {
-      const y = horizon + i * ((c.height - horizon) / 14);
+    g.fillRect(0, 0, W, H);
+    g.fillStyle = 'rgba(240,236,226,0.92)';
+    g.beginPath();
+    g.arc(mx, my, 26, 0, Math.PI * 2);
+    g.fill();
+
+    // horizon haze line
+    const hz = g.createLinearGradient(0, horizon - 26, 0, horizon + 6);
+    hz.addColorStop(0, 'rgba(120,150,170,0)');
+    hz.addColorStop(1, 'rgba(150,180,195,0.22)');
+    g.fillStyle = hz;
+    g.fillRect(0, horizon - 26, W, 32);
+
+    // sea bands with moon reflection
+    for (let i = 0; i < 15; i++) {
+      const y = horizon + i * ((H - horizon) / 15);
       const alpha = 0.05 + i * 0.012;
       g.strokeStyle = `rgba(120,160,180,${alpha})`;
       g.lineWidth = 1 + i * 0.3;
       g.beginPath();
-      for (let x = 0; x <= c.width; x += 14) {
-        const yy = y + Math.sin(x * 0.011 + this._waveT * (0.6 + i * 0.07) + i * 2.2) * (2 + i * 0.8);
+      for (let x = 0; x <= W; x += 14) {
+        const yy = y + Math.sin(x * 0.011 + t * (0.6 + i * 0.07) + i * 2.2) * (2 + i * 0.8);
         x === 0 ? g.moveTo(x, yy) : g.lineTo(x, yy);
       }
       g.stroke();
     }
+    // moon glimmer column on the water
+    g.globalAlpha = 0.5;
+    for (let i = 0; i < 10; i++) {
+      const y = horizon + i * ((H - horizon) / 12) + 4;
+      const w = 26 + i * 5 + Math.sin(t * 1.2 + i) * 6;
+      g.fillStyle = `rgba(230,228,214,${0.12 - i * 0.01})`;
+      g.fillRect(mx - w / 2 + Math.sin(t * 0.5 + i) * 4, y, w, 2);
+    }
+    g.globalAlpha = 1;
+
     // distant ship silhouette
-    const sx = c.width * 0.28 + Math.sin(this._waveT * 0.22) * 10;
-    const sy = horizon - 4 + Math.sin(this._waveT * 0.5) * 2.5;
-    g.fillStyle = 'rgba(8,14,20,0.9)';
+    const sx = W * 0.28 + Math.sin(t * 0.22) * 10;
+    const sy = horizon - 4 + Math.sin(t * 0.5) * 2.5;
+    g.fillStyle = 'rgba(8,14,20,0.92)';
     g.beginPath();
     g.moveTo(sx - 44, sy);
     g.quadraticCurveTo(sx, sy + 15, sx + 46, sy);
@@ -209,7 +275,7 @@ export class Menus {
     g.fillRect(sx - 20, sy - 55, 2.5, 48);
     g.fillRect(sx + 8, sy - 44, 2, 37);
     // white sails
-    g.fillStyle = 'rgba(216,212,200,0.85)';
+    g.fillStyle = 'rgba(216,212,200,0.88)';
     g.beginPath();
     g.moveTo(sx - 18, sy - 52);
     g.quadraticCurveTo(sx - 2, sy - 40, sx - 18, sy - 16);

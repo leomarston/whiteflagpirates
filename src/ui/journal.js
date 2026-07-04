@@ -156,7 +156,8 @@ export class Journal {
         const can = prog.canUnlock(branchKey, i);
         const node = document.createElement('div');
         node.className = `skill-node${owned ? ' owned' : ''}${can ? ' can' : ''}`;
-        node.innerHTML = `<div class="sname">${tier.name}</div><div class="sdesc">${tier.desc}</div>`;
+        const badge = owned ? '✓' : can ? '+' : '';
+        node.innerHTML = `${badge ? `<span class="snode-badge">${badge}</span>` : ''}<div class="sname">${tier.name}</div><div class="sdesc">${tier.desc}</div>`;
         if (can) {
           node.onclick = () => {
             prog.unlock(branchKey, i);

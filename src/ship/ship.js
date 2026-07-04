@@ -1,12 +1,17 @@
 // Ship entity + fleet registry.
 import * as THREE from 'three';
-import { COMBAT } from '../core/constants.js';
-import { clamp01, damp, wrapAngle } from '../core/utils.js';
+import { clamp, clamp01, damp, smoothstep, wrapAngle } from '../core/utils.js';
 import { buildShip } from './shipFactory.js';
 import { SHIP_TYPES } from './shipTypes.js';
 import { ShipPhysics } from './sailing.js';
 
 let _shipId = 0;
+
+// module scratch — reused every frame so hot paths allocate nothing
+const _s1 = new THREE.Vector3();
+const _s2 = new THREE.Vector3();
+
+const SINK_DURATION = 13;   // s from mortal blow to gone beneath the waves
 
 export class Ship {
   constructor(ctx, typeKey, opts = {}) {
@@ -38,6 +43,10 @@ export class Ship {
     this.crewCount = opts.crewCount ?? Math.round(this.type.crewMax * 0.7);
     this._fires = [];
     this._sprayTimer = 0;
+    this._slamTimer = 0;
+    this._sprayFlip = false;
+    this._bubbleAcc = 0;
+    this._wakeAdded = false;
   }
 
   get position() {
@@ -66,28 +75,38 @@ export class Ship {
     this.sinking = true;
     this._sinkT = 0;
     this.sailAmount = 0;
+    this.physics.speed *= 0.4;
+    // which way she rolls & tips as she founders (kept for the whole sequence)
+    this._sinkRoll = Math.random() < 0.5 ? 1 : -1;
+    this._sinkPitchDir = Math.random() < 0.5 ? 1 : -1;
+    this._sinkHeading = this.physics.heading;
     this.ctx.events?.emit('ship:sunk', { ship: this, byPlayer: !!byPlayer });
     for (const f of this._fires) f.stop?.();
     this._fires.length = 0;
+
+    // the mortal blow: a gout of splinters and a broad wash of foam
+    const fx = this.ctx.effects;
+    if (fx) {
+      const g = this.group;
+      const oy = this.ctx.ocean?.getHeight(g.position.x, g.position.z) ?? 0;
+      _s1.set(g.position.x, oy + 0.4, g.position.z);
+      fx.woodBurst?.(_s1, 10);
+      fx.splash?.(_s1, 1.8);
+    }
   }
 
   update(dt) {
     if (!this.alive) return;
     const g = this.group;
 
+    // register with the ocean's wake foam once we're live (player + AI ships)
+    if (!this._wakeAdded && this.ctx.ocean?.addWakeSource) {
+      this.ctx.ocean.addWakeSource(g);
+      this._wakeAdded = true;
+    }
+
     if (this.sinking) {
-      this._sinkT += dt;
-      const t = this._sinkT / 12;
-      g.position.y -= dt * (0.6 + t * 1.8);
-      g.rotation.x += dt * 0.05;
-      g.rotation.z += dt * 0.035;
-      if (this._sinkT > 1 && Math.random() < dt * 3) {
-        this.ctx.effects?.splash?.(g.position, 1.4);
-      }
-      if (t >= 1) {
-        this.alive = false;
-        this.ctx.scene.remove(g);
-      }
+      this._updateSinking(dt);
       return;
     }
 
@@ -97,33 +116,115 @@ export class Ship {
     this.reloadL = Math.max(0, this.reloadL - dt);
     this.reloadR = Math.max(0, this.reloadR - dt);
 
-    // sail cloth + flag uniforms
     const parts = g.userData.parts;
+    const t = this.ctx.time.t;
+
+    // sail cloth + flag uniforms
     const weather = this.ctx.weather;
     const sailShader = parts.sailMat.userData.shader;
     if (sailShader) {
       const rel = weather ? Math.abs(wrapAngle(this.physics.heading - weather.wind.angle)) : 1;
       sailShader.uniforms.uSail.value = damp(sailShader.uniforms.uSail.value, this.sailAmount, 4, dt);
       sailShader.uniforms.uAlign.value = clamp01(1 - Math.max(0, rel - 1.9) / 0.75);
-      sailShader.uniforms.uTime.value = this.ctx.time.t;
+      sailShader.uniforms.uTime.value = t;
     }
     const flagShader = parts.flagMat.userData.shader;
-    if (flagShader) flagShader.uniforms.uTime.value = this.ctx.time.t + this.id * 3.1;
+    if (flagShader) flagShader.uniforms.uTime.value = t + this.id * 3.1;
 
-    // night lanterns
+    // night lanterns — warm and softly guttering after dusk
     const sunY = this.ctx.sky?.sunDir.y ?? 1;
     const night = 1 - clamp01((sunY + 0.12) / 0.22);
-    parts.lanternMat.emissiveIntensity = 0.25 + night * 2.4;
-    if (parts.lanternLight) parts.lanternLight.intensity = night * 9;
+    const flick = 0.9 + 0.1 * Math.sin(t * 8.3 + this.id) * Math.sin(t * 3.1 + this.id * 2.0);
+    parts.lanternMat.emissiveIntensity = (0.25 + night * 2.4) * flick;
+    if (parts.lanternLight) parts.lanternLight.intensity = night * 9 * flick;
     if (g.userData.sternWindows) g.userData.sternWindows.emissiveIntensity = night * 1.4;
 
-    // bow spray when driving hard
-    this._sprayTimer -= dt;
-    if (this.physics.speed > 4.5 && this._sprayTimer <= 0) {
-      this._sprayTimer = 0.4 + Math.random() * 0.3;
-      const bow = g.localToWorld(new THREE.Vector3(0, 0, this.type.length * 0.46));
-      bow.y = this.ctx.ocean?.getHeight(bow.x, bow.z) ?? 0;
-      this.ctx.effects?.splash?.(bow, 0.5 + this.physics.speed / 12);
+    this._updateBowWave(dt);
+  }
+
+  // -- bow wave & spray: peels off the forefoot, heavier the faster she drives
+  _updateBowWave(dt) {
+    const spd = this.physics.speed;
+    const fx = this.ctx.effects;
+    if (!fx) return;
+    const g = this.group;
+    const type = this.type;
+
+    if (spd > 2.5) {
+      this._sprayTimer -= dt;
+      if (this._sprayTimer <= 0) {
+        this._sprayTimer = clamp(0.34 - spd * 0.012, 0.09, 0.34);
+        // alternate the port & starboard bow quarters
+        this._sprayFlip = !this._sprayFlip;
+        const side = this._sprayFlip ? 1 : -1;
+        _s1.set(side * type.beam * 0.32, 0, type.length * 0.46);
+        g.localToWorld(_s1);
+        _s1.y = (this.ctx.ocean?.getHeight(_s1.x, _s1.z) ?? 0) + 0.1;
+        fx.splash?.(_s1, clamp(0.35 + spd / 16, 0.35, 1.3));
+      }
+    }
+
+    // driving hard, she buries her stem in a swell — a sheet of green water
+    this._slamTimer -= dt;
+    if (spd > 5 && this._slamTimer <= 0) {
+      _s2.set(0, 0, type.length * 0.5);
+      g.localToWorld(_s2);
+      const oh = this.ctx.ocean?.getHeight(_s2.x, _s2.z) ?? 0;
+      if (_s2.y < oh - 0.22) {
+        this._slamTimer = 0.45;
+        _s2.y = oh + 0.15;
+        fx.splash?.(_s2, 1.0 + spd / 12);
+      }
+    }
+  }
+
+  // -- founder & go under: slow heel, accelerating plunge, boiling foam -------
+  _updateSinking(dt) {
+    const g = this.group;
+    const type = this.type;
+    this._sinkT += dt;
+    const t = clamp01(this._sinkT / SINK_DURATION);
+
+    // roll onto her beam ends and tip as the sea takes her — eased, unhurried
+    const heel = this._sinkRoll * 1.0 * smoothstep(0.0, 0.62, t);
+    const pitch = this._sinkPitchDir * 0.55 * smoothstep(0.18, 0.95, t);
+    g.rotation.set(pitch, this._sinkHeading, heel, 'YXZ');
+
+    // descent starts gentle, then she slides under with a rush
+    const rate = 0.45 + t * t * 3.4;
+    g.position.y -= dt * rate;
+
+    // boiling foam & rising bubbles around the drowning hull
+    const fx = this.ctx.effects;
+    if (fx && t < 0.98) {
+      this._bubbleAcc -= dt;
+      if (this._bubbleAcc <= 0) {
+        this._bubbleAcc = 0.14 + Math.random() * 0.18;
+        _s1.set((Math.random() - 0.5) * type.length * 0.7, 0, (Math.random() - 0.5) * type.beam * 1.4)
+          .applyAxisAngle(_s2.set(0, 1, 0), this._sinkHeading);
+        _s1.x += g.position.x;
+        _s1.z += g.position.z;
+        _s1.y = (this.ctx.ocean?.getHeight(_s1.x, _s1.z) ?? 0) + 0.05;
+        fx.splash?.(_s1, 0.3 + Math.random() * 0.35);
+        if (Math.random() < 0.25) fx.woodBurst?.(_s1, 2);
+      }
+    }
+
+    if (t >= 1) {
+      // the final plunge — a last wash of foam, wreckage, and a shudder felt
+      // by anyone close enough to see her go
+      if (fx) {
+        _s1.set(g.position.x, (this.ctx.ocean?.getHeight(g.position.x, g.position.z) ?? 0) + 0.2, g.position.z);
+        fx.splash?.(_s1, 2.2);
+        fx.woodBurst?.(_s1, 8);
+      }
+      const cam = this.ctx.camera;
+      if (cam) {
+        const d = Math.hypot(g.position.x - cam.position.x, g.position.z - cam.position.z);
+        if (d < 150) this.ctx.events?.emit('shake', { amount: 0.4 * (1 - d / 150) });
+      }
+      this.alive = false;
+      this.ctx.scene.remove(g);
     }
   }
 }
