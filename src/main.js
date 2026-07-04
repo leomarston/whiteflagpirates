@@ -35,6 +35,7 @@ import { Progression } from './systems/progression.js';
 import { Encounters } from './systems/encounters.js';
 import { AudioEngine } from './audio/audio.js';
 import { Music } from './audio/music.js';
+import { Shanty } from './audio/shanty.js';
 import { UI } from './ui/ui.js';
 
 const events = new EventBus();
@@ -107,6 +108,7 @@ construct('progression', Progression);
 construct('encounters', Encounters);
 construct('audio', AudioEngine);
 construct('music', Music);
+construct('shanty', Shanty);
 construct('ui', UI);
 
 if (bootErrors.length) {
@@ -291,7 +293,7 @@ const order = [
   'ships', 'playerShip', 'enemies', 'combat', 'effects',
   'character', 'npcs', 'animals',
   'economy', 'crew', 'quests', 'treasure', 'progression', 'encounters',
-  'audio', 'music',
+  'audio', 'music', 'shanty',
 ];
 
 const failedOnce = new Set();

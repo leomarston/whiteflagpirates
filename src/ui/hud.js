@@ -3,8 +3,25 @@ import { Vector3 } from 'three';
 import { clamp01, wrapAngle } from '../core/utils.js';
 
 const _dir = new Vector3();
+// scratch reused for world→screen projection of nav beacons (alloc ONCE)
+const _proj = new Vector3();
+const _rel = new Vector3();
+const _camDir = new Vector3();
+const _objPos = new Vector3();
 
 const AMMO_NAMES = { round: 'ROUND SHOT', chain: 'CHAIN SHOT', grape: 'GRAPE SHOT' };
+
+// faction accent colours (target panel tint + port beacon dots)
+const FACTION_COLORS = {
+  corsairs: '#e6ddc4',
+  crown: '#c96a5a',
+  concern: '#d08a3c',
+  tidebound: '#5fb0a4',
+  pirate: '#c9a24b',
+};
+
+const BEACON_POOL = 12;    // hard cap on simultaneous markers
+const PORT_BEACON_RANGE = 3000; // m
 
 const CARDINALS = [[0, 'N'], [Math.PI / 2, 'E'], [Math.PI, 'S'], [-Math.PI / 2, 'W']];
 const INTERCARDINALS = [
@@ -115,6 +132,103 @@ export class HUD {
       void this.goldEl.offsetWidth;
       this.goldEl.classList.add('flash');
     });
+
+    this._buildWave3();
+  }
+
+  // Feature C: enemy target panel + world-space nav beacons. Styles are injected
+  // from JS (a single <style id="hud-wave3-style">) so this stays to one file and
+  // never touches styles.css.
+  _buildWave3() {
+    if (!document.getElementById('hud-wave3-style')) {
+      const st = document.createElement('style');
+      st.id = 'hud-wave3-style';
+      st.textContent = `
+        #target-panel{position:absolute;left:50%;top:82px;transform:translateX(-50%);
+          min-width:210px;max-width:320px;padding:7px 12px 8px;
+          background:linear-gradient(180deg,rgba(12,22,32,0.72),rgba(6,12,18,0.82));
+          border:1px solid rgba(208,169,79,0.34);border-radius:8px;
+          font-family:Georgia,serif;color:#e8dcc0;text-align:center;
+          box-shadow:0 3px 14px rgba(0,0,0,0.4);pointer-events:none;
+          transition:opacity .18s ease;opacity:1;}
+        #target-panel.hidden{opacity:0;display:none;}
+        #target-panel .tp-head{display:flex;align-items:baseline;justify-content:center;
+          gap:8px;line-height:1.1;}
+        #target-panel .tp-name{font-size:15px;font-weight:600;letter-spacing:.4px;
+          color:#f0e6cc;text-shadow:0 1px 2px rgba(0,0,0,.6);}
+        #target-panel .tp-faction{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;
+          opacity:.9;}
+        #target-panel .tp-hullbar{position:relative;height:7px;margin:6px 0 5px;border-radius:4px;
+          background:rgba(0,0,0,0.45);border:1px solid rgba(255,255,255,0.08);overflow:hidden;}
+        #target-panel .tp-hullbar i{display:block;height:100%;width:100%;border-radius:3px;
+          background:hsl(120,70%,45%);transition:width .18s ease,background .18s ease;}
+        #target-panel .tp-stats{display:flex;justify-content:center;gap:16px;font-size:12px;
+          color:#c9b98f;letter-spacing:.5px;}
+        #target-panel .tp-board{margin-top:5px;font-size:11px;font-weight:600;letter-spacing:1px;
+          color:#f0c869;text-shadow:0 0 8px rgba(240,200,105,.55);
+          animation:tp-board-pulse 1.1s ease-in-out infinite;}
+        #target-panel .tp-board.hidden{display:none;}
+        @keyframes tp-board-pulse{0%,100%{opacity:.55;}50%{opacity:1;}}
+        #beacon-layer{position:absolute;inset:0;overflow:hidden;pointer-events:none;
+          z-index:2;}
+        #beacon-layer .beacon-marker{position:absolute;left:0;top:0;display:none;
+          transform:translate(-50%,-50%);white-space:nowrap;
+          font-family:Georgia,serif;text-align:center;will-change:left,top,transform,opacity;}
+        #beacon-layer .bm-dot{display:inline-block;font-size:14px;line-height:1;
+          filter:drop-shadow(0 0 4px rgba(0,0,0,.7));}
+        #beacon-layer .bm-label{display:block;margin-top:1px;font-size:10px;letter-spacing:.6px;
+          color:#e8dcc0;text-shadow:0 1px 3px rgba(0,0,0,.85);}
+        #beacon-layer .bm-arrow{display:none;font-size:11px;line-height:1;color:inherit;
+          filter:drop-shadow(0 0 4px rgba(0,0,0,.7));}
+        #beacon-layer .beacon-marker.edge .bm-arrow{display:inline-block;}
+        #beacon-layer .beacon-marker.edge .bm-label{display:none;}
+        #beacon-layer .beacon-marker.objective .bm-dot{color:#eccb6c;
+          filter:drop-shadow(0 0 6px rgba(236,203,108,.75));}
+        #beacon-layer .beacon-marker.objective .bm-label{color:#f0dfa0;font-weight:600;}
+      `;
+      document.head.appendChild(st);
+    }
+
+    // target panel (top-centre, under the compass)
+    const tp = document.createElement('div');
+    tp.id = 'target-panel';
+    tp.className = 'hidden';
+    tp.innerHTML = `
+      <div class="tp-head"><span class="tp-name"></span><span class="tp-faction"></span></div>
+      <div class="tp-hullbar"><i></i></div>
+      <div class="tp-stats"><span class="tp-crew"></span><span class="tp-dist"></span></div>
+      <div class="tp-board hidden">◈ BOARDABLE — close in</div>
+    `;
+    this.el.appendChild(tp);
+    this.targetPanel = tp;
+    this.tpName = tp.querySelector('.tp-name');
+    this.tpFaction = tp.querySelector('.tp-faction');
+    this.tpHullFill = tp.querySelector('.tp-hullbar i');
+    this.tpCrew = tp.querySelector('.tp-crew');
+    this.tpDist = tp.querySelector('.tp-dist');
+    this.tpBoard = tp.querySelector('.tp-board');
+
+    // nav-beacon layer + a reused pool of marker elements (never created per-frame)
+    const layer = document.createElement('div');
+    layer.id = 'beacon-layer';
+    this.el.appendChild(layer);
+    this.beaconLayer = layer;
+    this._beacons = [];
+    this._objLabel = 'Objective';
+    for (let i = 0; i < BEACON_POOL; i++) {
+      const m = document.createElement('div');
+      m.className = 'beacon-marker';
+      m.innerHTML = '<span class="bm-arrow">▲</span><span class="bm-dot">◈</span><span class="bm-label"></span>';
+      layer.appendChild(m);
+      this._beacons.push({
+        el: m,
+        arrow: m.querySelector('.bm-arrow'),
+        dot: m.querySelector('.bm-dot'),
+        label: m.querySelector('.bm-label'),
+        _x: -1, _y: -1, _s: -1, _op: -1, _rot: null,
+        _text: null, _kind: null, _edge: null, _color: null, _vis: false,
+      });
+    }
   }
 
   _set(key, el, value) {
@@ -216,7 +330,172 @@ export class HUD {
       this.vignette.style.opacity = String(Math.max(this._vignetteT, 0));
     }
 
+    this._updateTarget();
+    this._updateBeacons();
+
     this._drawCompass();
+  }
+
+  // Enemy target panel: driven by the naval agent's ctx.combat.currentTarget.
+  _updateTarget() {
+    const ctx = this.ctx;
+    const tgt = ctx.mode === 'sail' ? ctx.combat?.currentTarget : null;
+    const show = !!tgt;
+    if (this._cache.tpShow !== show) {
+      this._cache.tpShow = show;
+      this.targetPanel.classList.toggle('hidden', !show);
+    }
+    if (!tgt) return;
+
+    this._set('tpName', this.tpName, tgt.name ?? 'Unknown Sail');
+    const fac = tgt.faction ?? '';
+    if (this._cache.tpFac !== fac) {
+      this._cache.tpFac = fac;
+      this.tpFaction.textContent = fac ? fac.toUpperCase() : '';
+      this.tpFaction.style.color = FACTION_COLORS[fac] ?? '#c9b98f';
+    }
+    const frac = clamp01(tgt.hullFrac ?? 0);
+    const pct = Math.round(frac * 100);
+    if (this._cache.tpHull !== pct) {
+      this._cache.tpHull = pct;
+      this.tpHullFill.style.width = `${pct}%`;
+      // green (120°) → red (0°) as hull drops
+      this.tpHullFill.style.background = `hsl(${Math.round(frac * 120)},72%,45%)`;
+    }
+    this._set('tpCrew', this.tpCrew, `⚔ ${tgt.crewCount ?? 0}`);
+    const dist = tgt.distance;
+    this._set('tpDist', this.tpDist, dist != null ? `${Math.round(dist)} m` : '—');
+    const board = !!tgt.boardable;
+    if (this._cache.tpBoard !== board) {
+      this._cache.tpBoard = board;
+      this.tpBoard.classList.toggle('hidden', !board);
+    }
+  }
+
+  // World position of the first active quest's target, if one is derivable.
+  // Returns the shared _objPos scratch or null (never invents data).
+  _questTargetPos() {
+    const ctx = this.ctx;
+    const defs = ctx.quests?.activeDefs?.() ?? [];
+    const def = defs[0];
+    const o = def?.objective;
+    if (!o) return null;
+    const islands = ctx.world?.islands ?? [];
+    let isl = null;
+    if (o.type === 'visit') isl = islands.find((i) => i.def?.id === o.islandId);
+    else if (o.type === 'deliver') isl = islands.find((i) => i.port?.name === o.toPort);
+    else if (o.type === 'talk') isl = islands.find((i) => i.port?.name === o.port);
+    if (!isl) return null;
+    const dp = isl.port?.dockPosition;
+    if (dp) _objPos.copy(dp);
+    else if (isl.def?.position) _objPos.set(isl.def.position[0], 8, isl.def.position[1]);
+    else return null;
+    this._objLabel = def.title ?? 'Objective';
+    return _objPos;
+  }
+
+  // Project world targets to screen and drive the reused marker pool.
+  _updateBeacons() {
+    const ctx = this.ctx;
+    const cam = ctx.camera;
+    const pool = this._beacons;
+    if (!pool) return;
+    const active = cam && ctx.mode === 'sail';
+    if (!active) {
+      if (!this._cache.beaconsOff) {
+        this._cache.beaconsOff = true;
+        for (const b of pool) this._hideBeacon(b);
+      }
+      return;
+    }
+    this._cache.beaconsOff = false;
+
+    const W = window.innerWidth || 1;
+    const H = window.innerHeight || 1;
+    const shipPos = ctx.playerShip?.ship?.position ?? cam.position;
+    cam.getWorldDirection(_camDir);
+    let idx = 0;
+
+    // objective beacon first (always drawn strong)
+    const objPos = this._questTargetPos();
+    if (objPos && idx < pool.length) {
+      const d = Math.hypot(objPos.x - shipPos.x, objPos.z - shipPos.z);
+      if (this._placeBeacon(pool[idx], objPos, 'objective', this._objLabel, '#eccb6c', d, cam, W, H)) idx++;
+    }
+
+    // nearby port beacons (sail mode only, within range, capped by pool size)
+    for (const isl of ctx.world?.islands ?? []) {
+      if (idx >= pool.length) break;
+      const port = isl.port;
+      const dp = port?.dockPosition;
+      if (!dp) continue;
+      // skip the port that the objective beacon already marks (avoid a doubled dot)
+      if (objPos && Math.hypot(dp.x - objPos.x, dp.z - objPos.z) < 2) continue;
+      const d = Math.hypot(dp.x - shipPos.x, dp.z - shipPos.z);
+      if (d > PORT_BEACON_RANGE) continue;
+      const color = FACTION_COLORS[port.faction] ?? '#c9a24b';
+      if (this._placeBeacon(pool[idx], dp, 'port', port.name ?? '', color, d, cam, W, H)) idx++;
+    }
+
+    for (let i = idx; i < pool.length; i++) this._hideBeacon(pool[i]);
+  }
+
+  _hideBeacon(b) {
+    if (b._vis) { b._vis = false; b.el.style.display = 'none'; }
+  }
+
+  _placeBeacon(b, worldPos, kind, text, color, dist, cam, W, H) {
+    _rel.copy(worldPos).sub(cam.position);
+    const inFront = _rel.dot(_camDir) > 0;
+    _proj.copy(worldPos).project(cam);
+    let sx = (_proj.x * 0.5 + 0.5) * W;
+    let sy = (-_proj.y * 0.5 + 0.5) * H;
+    if (!inFront) { sx = W - sx; sy = H - sy; } // mirror back in front of us
+
+    const cx = W * 0.5, cy = H * 0.5;
+    const m = 30;
+    let edge = !inFront || sx < m || sx > W - m || sy < m || sy > H - m;
+    let rot = 0;
+    if (edge) {
+      let vx = sx - cx, vy = sy - cy;
+      if (vx === 0 && vy === 0) vy = -1;
+      const maxX = cx - m, maxY = cy - m;
+      const scale = Math.min(maxX / Math.max(Math.abs(vx), 1e-3), maxY / Math.max(Math.abs(vy), 1e-3));
+      sx = cx + vx * scale;
+      sy = cy + vy * scale;
+      rot = Math.atan2(vy, vx) * 180 / Math.PI + 90; // ▲ points up by default
+    }
+
+    // fade + scale by distance so near ports read stronger
+    const t = clamp01(1 - dist / PORT_BEACON_RANGE);
+    const op = kind === 'objective' ? 0.95 : (0.32 + 0.63 * t);
+    const s = kind === 'objective' ? 1.05 : (0.82 + 0.32 * t);
+
+    if (!b._vis) { b._vis = true; b.el.style.display = 'block'; }
+    if (b._kind !== kind) {
+      b._kind = kind;
+      b.el.classList.toggle('objective', kind === 'objective');
+      b.el.classList.toggle('port', kind === 'port');
+    }
+    if (b._edge !== edge) { b._edge = edge; b.el.classList.toggle('edge', edge); }
+    if (b._text !== text) { b._text = text; b.label.textContent = text; }
+    if (b._color !== color) {
+      b._color = color;
+      b.dot.style.color = color;
+      b.arrow.style.color = color;
+    }
+    const rx = Math.round(sx), ry = Math.round(sy);
+    if (b._x !== rx) { b._x = rx; b.el.style.left = `${rx}px`; }
+    if (b._y !== ry) { b._y = ry; b.el.style.top = `${ry}px`; }
+    const opr = Math.round(op * 100) / 100;
+    if (b._op !== opr) { b._op = opr; b.el.style.opacity = String(opr); }
+    const sr = Math.round(s * 100) / 100;
+    if (b._s !== sr) { b._s = sr; b.el.style.transform = `translate(-50%,-50%) scale(${sr})`; }
+    if (edge) {
+      const rr = Math.round(rot);
+      if (b._rot !== rr) { b._rot = rr; b.arrow.style.transform = `rotate(${rr}deg)`; }
+    }
+    return true;
   }
 
   _toggle(key, el, cls, on) {

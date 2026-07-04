@@ -1,9 +1,10 @@
 // Ship entity + fleet registry.
 import * as THREE from 'three';
-import { clamp, clamp01, damp, smoothstep, wrapAngle } from '../core/utils.js';
+import { clamp, clamp01, damp, lerp, smoothstep, wrapAngle } from '../core/utils.js';
 import { buildShip } from './shipFactory.js';
 import { SHIP_TYPES } from './shipTypes.js';
 import { ShipPhysics } from './sailing.js';
+import { CrewFigures } from './crewFigures.js';
 
 let _shipId = 0;
 
@@ -47,6 +48,22 @@ export class Ship {
     this._sprayFlip = false;
     this._bubbleAcc = 0;
     this._wakeAdded = false;
+
+    // visible battle damage: tattered/darkened canvas, chain-shot wear, smoke
+    this._sailDmg = 0;
+    this._riggingWear = 0;
+    this._smokeTimer = 0;
+    this._offRigging = ctx.events?.on('ship:rigging-hit', (e) => {
+      if (e?.ship === this) this._riggingWear = clamp01(this._riggingWear + 0.16);
+    });
+
+    // living crew on deck — one InstancedMesh, ticked in update, culled by LOD
+    try {
+      this.crew = new CrewFigures(ctx, this);
+      if (this.crew?.object3D) this.group.add(this.crew.object3D);
+    } catch (err) {
+      this.crew = null;
+    }
   }
 
   get position() {
@@ -105,6 +122,9 @@ export class Ship {
       this._wakeAdded = true;
     }
 
+    // living crew ticks in both states — they scatter & vanish as she founders
+    this.crew?.update(dt);
+
     if (this.sinking) {
       this._updateSinking(dt);
       return;
@@ -139,7 +159,74 @@ export class Ship {
     if (parts.lanternLight) parts.lanternLight.intensity = night * 9 * flick;
     if (g.userData.sternWindows) g.userData.sternWindows.emissiveIntensity = night * 1.4;
 
+    this._updateBattleDamage(dt);
     this._updateBowWave(dt);
+  }
+
+  // -- visible battle damage: canvas darkens & tatters as she's shot to pieces,
+  //    chain shot lets her sails luff & sag, and a badly-holed hull pours smoke.
+  _updateBattleDamage(dt) {
+    const g = this.group;
+    const parts = g.userData?.parts;
+    if (!parts) return;
+
+    // chain-shot wear bleeds off slowly so a repaired ship recovers her canvas
+    if (this._riggingWear > 0) this._riggingWear = Math.max(0, this._riggingWear - dt * 0.03);
+
+    const hullFrac = this.hullMax > 0 ? this.hull / this.hullMax : 1;
+    let dmg = 0;
+    if (hullFrac < 0.4) dmg = clamp01((0.4 - hullFrac) / 0.4);
+    dmg = Math.max(dmg, this._riggingWear);
+    const cap = this.physics?.maxSpeedCap;
+    const chain = (cap != null && isFinite(cap)) ? 1 : 0;   // chain-slowed -> sails sag
+    this._sailDmg = damp(this._sailDmg, dmg, 3, dt);
+    const d = this._sailDmg;
+
+    // darken & dull the cloth (readable at distance)
+    const sailMat = parts.sailMat;
+    if (sailMat) {
+      const c = lerp(1, 0.42, d);
+      sailMat.color?.setRGB?.(c, c * 0.97, c * 0.9);
+      sailMat.emissiveIntensity = lerp(0.24, 0.06, d);
+    }
+    // tatter/reef the individual sails; chain-slow lets them sag a touch further
+    const sy = lerp(1, 0.72, d) * (1 - 0.1 * chain);
+    const sails = parts.sails;
+    if (sails) {
+      for (let i = 0; i < sails.length; i++) {
+        const sm = sails[i];
+        if (!sm) continue;
+        sm.scale.y = sy;
+        sm.scale.x = lerp(1, i % 2 ? 0.9 : 0.96, d);   // uneven, torn head
+      }
+    }
+
+    // battle smoke pouring from a badly-holed hull — throttled, never per-frame
+    if (hullFrac < 0.35) {
+      this._smokeTimer -= dt;
+      if (this._smokeTimer <= 0) {
+        this._smokeTimer = 0.55 + Math.random() * 0.45;
+        const fx = this.ctx.effects;
+        if (fx?.smoke?.spawn) {
+          const type = this.type;
+          _s1.set(
+            (Math.random() - 0.5) * type.beam * 0.34,
+            (parts.deckY ?? 0) + 1.1,
+            (Math.random() - 0.5) * type.length * 0.24,
+          );
+          g.localToWorld(_s1);
+          const wind = this.ctx.weather?.wind;
+          const wx = wind ? Math.cos(wind.angle) * 1.2 : 0.4;
+          const wz = wind ? Math.sin(wind.angle) * 1.2 : 0.2;
+          fx.smoke.spawn(
+            _s1.x, _s1.y, _s1.z,
+            wx * 0.3, 1.4 + Math.random() * 1.2, wz * 0.3,
+            1.6 + Math.random() * 1.4, 1.8 + Math.random() * 1.6,
+            0.16 + Math.random() * 0.12, (Math.random() - 0.5) * 0.8,
+          );
+        }
+      }
+    }
   }
 
   // -- bow wave & spray: peels off the forefoot, heavier the faster she drives
@@ -234,6 +321,9 @@ export class Ship {
   dispose() {
     if (this._disposed) return;
     this._disposed = true;
+    this._offRigging?.();
+    this._offRigging = null;
+    this.crew?.dispose?.();
     const seen = new Set();
     this.group.traverse((o) => {
       if (o.geometry && !seen.has(o.geometry)) { seen.add(o.geometry); o.geometry.dispose(); }

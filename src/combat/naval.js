@@ -31,6 +31,10 @@ export class NavalCombat {
     this.ctx = ctx;
     this.playerAmmo = 'round';
     this.shake = 0; // decaying combat shake, readable as ctx.combat.shake
+    // Nearest live enemy the player is engaging, refreshed each frame in update().
+    // Shape: { ship, name, faction, hullFrac, crewCount, boardable, distance } | null.
+    // Reused across frames; nulled out when nothing qualifies. HUD reads ctx.combat.currentTarget.
+    this.currentTarget = null;
 
     this.balls = [];
     for (let i = 0; i < MAX_BALLS; i++) {
@@ -223,6 +227,8 @@ export class NavalCombat {
           if (ball.type === 'chain') {
             this._chainSlow.set(hit, 12);
             hit.physics.maxSpeedCap = hit.type.maxSpeed * 0.5;
+            // rigging/sail damage cue — a chain shot tore through the sails
+            ctx.events?.emit('ship:rigging-hit', { ship: hit });
           }
           if (ball.type === 'grape') {
             hit.crewCount = Math.max(0, hit.crewCount - (1 + Math.floor(Math.random() * 2)));
@@ -277,6 +283,45 @@ export class NavalCombat {
 
     this._updatePlayerGunnery();
     this._updateBoardingOffers();
+    this._updateTarget();
+  }
+
+  /** Maintain ctx.combat.currentTarget: the single enemy the player is engaging.
+   *  Nearest live enemy within range, biased toward one abeam/ahead (ships behind
+   *  the player are penalised). No per-frame Vector3 allocation. */
+  _updateTarget() {
+    const ctx = this.ctx;
+    const ship = ctx.playerShip?.ship;
+    if (ctx.mode !== 'sail' || !ship || !ship.alive || ship.sinking) {
+      this.currentTarget = null;
+      return;
+    }
+    const p = ship.group.position;
+    const heading = ship.physics.heading;
+    // forward unit vector (same heading->world mapping used for target leading below)
+    const fx = Math.sin(heading), fz = Math.cos(heading);
+    const RANGE = 450;
+    let best = null, bestScore = Infinity, bestD = 0;
+    for (const s of ctx.ships?.list ?? []) {
+      if (s === ship || s.isPlayer || !s.alive || s.sinking) continue;
+      const dx = s.position.x - p.x, dz = s.position.z - p.z;
+      const d = Math.hypot(dx, dz);
+      if (d > RANGE) continue;
+      // bias: penalise ships well behind the player so abeam/ahead contacts win ties
+      const fwd = d > 0.001 ? (dx * fx + dz * fz) / d : 1; // cos angle off the bow, -1..1
+      const score = d * (fwd < -0.3 ? 1.6 : 1);
+      if (score < bestScore) { bestScore = score; best = s; bestD = d; }
+    }
+    if (!best) { this.currentTarget = null; return; }
+    let t = this.currentTarget;
+    if (!t) t = this.currentTarget = {};
+    t.ship = best;
+    t.name = best.name;
+    t.faction = best.faction;
+    t.hullFrac = clamp(best.hull / best.hullMax, 0, 1);
+    t.crewCount = best.crewCount;
+    t.boardable = best.hull < best.hullMax * 0.25;
+    t.distance = bestD;
   }
 
   _updatePlayerGunnery() {
@@ -347,9 +392,13 @@ export class NavalCombat {
     const ps = ctx.playerShip?.ship;
     if (!ps || ctx.mode !== 'sail') return;
     for (const ship of ctx.ships?.list ?? []) {
-      if (ship === ps || !ship.alive || ship.sinking || ship.isPlayer) continue;
+      if (ship === ps || ship.isPlayer) continue;
+      // Track boardability on the ship itself so other systems can read it without
+      // listening for the offer event (a ship is boardable once hull < 25%).
+      const boardable = ship.alive && !ship.sinking && ship.hull < ship.hullMax * 0.25;
+      ship._boardable = boardable;
+      if (!boardable) continue;
       if (this._offered.has(ship)) continue;
-      if (ship.hull > ship.hullMax * 0.25) continue;
       if (ship.position.distanceTo(ps.position) > COMBAT.BOARD_RANGE) continue;
       this._offered.add(ship);
       ctx.events?.emit('boarding:offer', { ship });
