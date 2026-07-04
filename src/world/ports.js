@@ -405,6 +405,8 @@ function buildPort(ctx, world, isl, tex) {
 
   const buildings = [];
   const placed = [];
+  let tavernData = null;   // interior/roof metadata handed back by addBuilding
+  let tavernFX = null;     // { roofMat, light, fade, footprint } wired into update()
   const minH = style.stilt ? 0.2 : 1;
 
   for (const kind of kinds) {
@@ -437,10 +439,12 @@ function buildPort(ctx, world, isl, tex) {
     let rot = Math.atan2(toX, toZ);
     rot += randRange(rng, -1, 1) * (style.ramshackle ? 0.35 : 0.12);
 
+    const tvExtras = kind === 'tavern' ? { walkSurfaces, out: {} } : null;
     const doorPosition = addBuilding(B, style, faction, kind, spot, dims, rot, rng, field, {
       heading, dx, dz, perpX, perpZ,
-    });
+    }, tvExtras);
     buildings.push({ kind, position: new THREE.Vector3(spot.x, spot.h, spot.z), doorPosition });
+    if (tvExtras) tavernData = tvExtras.out;
   }
 
   // ---------------------------------------------------------------------
@@ -511,6 +515,32 @@ function buildPort(ctx, world, isl, tex) {
   }
 
   // ---------------------------------------------------------------------
+  // TAVERN — its roof is a private mesh/material (so it can fade when the
+  // player steps inside) plus one warm interior light. Scoped to THIS port:
+  // the fade check in update() reads this closure's own footprint only.
+  // ---------------------------------------------------------------------
+  if (tavernData && tavernData.roofGeos && tavernData.roofGeos.length) {
+    const rgeos = tavernData.roofGeos.map((g) => (g.index ? g.toNonIndexed() : g));
+    const rmerged = mergeGeometries(rgeos);
+    if (rmerged) {
+      const roofMat = M.roof.clone();
+      roofMat.transparent = true; roofMat.opacity = 1; roofMat.depthWrite = true;
+      const roofMesh = new THREE.Mesh(rmerged, roofMat);
+      roofMesh.castShadow = shadowsOn; roofMesh.receiveShadow = true;
+      roofMesh.matrixAutoUpdate = false; roofMesh.updateMatrix();
+      group.add(roofMesh);
+      const lp = tavernData.lightPos || { x: tavernData.cx, y: townCenter.y + 2, z: tavernData.cz };
+      const inLight = new THREE.PointLight(0xffb060, 0, 16, 1.7);
+      inLight.position.set(lp.x, lp.y, lp.z); group.add(inLight);
+      tavernFX = {
+        roofMat, roofMesh, light: inLight, fade: 0, castBase: shadowsOn,
+        cx: tavernData.cx, cz: tavernData.cz, rot: tavernData.rot,
+        halfW: tavernData.halfW, halfD: tavernData.halfD,
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------------
   // LIGHTS — exactly three warm pools, faded in at night.
   // ---------------------------------------------------------------------
   const pierLight = new THREE.PointLight(0xffb45e, 0, 62, 1.6);
@@ -546,6 +576,29 @@ function buildPort(ctx, world, isl, tex) {
       pierLight.intensity = night * 22 * flick;
       rootLight.intensity = night * 15 * flick;
       plazaLight.intensity = night * 26 * flick;
+      // tavern: warm interior light (kept lit day & night so the room is inviting
+      // when you step in) + roof fade + shadow drop when the player is inside
+      if (tavernFX) {
+        let inside = false;
+        const cp = ctx.mode === 'foot' && ctx.character ? ctx.character.position : null;
+        if (cp) {
+          const ddx = cp.x - tavernFX.cx, ddz = cp.z - tavernFX.cz;
+          const cs = Math.cos(tavernFX.rot), sn = Math.sin(tavernFX.rot);
+          const lx = ddx * cs - ddz * sn, lz = ddx * sn + ddz * cs; // building-local
+          inside = Math.abs(lx) <= tavernFX.halfW + 1.6 && Math.abs(lz) <= tavernFX.halfD + 1.6;
+        }
+        // warm base so the enclosed room reads well even at midday; hotter at night
+        tavernFX.light.intensity = (inside ? 3.4 : 2.2) + night * 2.6 * flick;
+        const goal = inside ? 1 : 0;
+        tavernFX.fade += (goal - tavernFX.fade) * Math.min(1, dt * 6);
+        const op = 1 - tavernFX.fade * 0.9;      // 1.0 (solid) → 0.1 (see-through)
+        tavernFX.roofMat.opacity = op;
+        tavernFX.roofMat.depthWrite = op >= 0.9;
+        // stop the faded roof shadowing the interior so daylight reaches inside
+        if (tavernFX.roofMesh && tavernFX.castBase) {
+          tavernFX.roofMesh.castShadow = op >= 0.6;
+        }
+      }
     },
   };
 }
@@ -570,7 +623,7 @@ function buildingDims(kind, faction, rng) {
 // dressing (tavern sign, shipwright slipway, market stalls, ...). Returns the
 // door approach position (where NPCs stand / players spawn).
 // ---------------------------------------------------------------------------
-function addBuilding(B, style, faction, kind, spot, dims, rot, rng, field, geo) {
+function addBuilding(B, style, faction, kind, spot, dims, rot, rng, field, geo, tv) {
   const { w, d, h } = dims;
   const yBase = spot.h;
   const lift = style.stilt ? 1.45 : 0;
@@ -598,12 +651,28 @@ function addBuilding(B, style, faction, kind, spot, dims, rot, rng, field, geo) 
   }
 
   // ---- body ----
-  const body = new THREE.BoxGeometry(w, h, d);
-  body.rotateY(rot); body.translate(spot.x, floorY + h / 2, spot.z); B.wall.push(body);
   const wallTop = floorY + h;
+  if (kind === 'tavern' && tv) {
+    // Tavern: walls with an OPEN doorway in the plaza-facing (+Z) wall so the
+    // room is enterable where the existing door/glow already sit (addTavernShell).
+    addTavernShell(B, LW, spot, w, d, h, rot, floorY);
+  } else {
+    const body = new THREE.BoxGeometry(w, h, d);
+    body.rotateY(rot); body.translate(spot.x, floorY + h / 2, spot.z); B.wall.push(body);
+  }
 
   // ---- roof ----
-  addRoof(B, style, spot, w, d, wallTop, rot);
+  if (kind === 'tavern' && tv) {
+    // Build the tavern roof into a private bucket so buildPort can turn it into
+    // its own mesh/material and fade it out when the player is inside.
+    const RB = { roof: [], wood: [], wall: [] };
+    addRoof(RB, style, spot, w, d, wallTop, rot);
+    for (const g of RB.wood) B.wood.push(g);   // ridge beam (stays, not faded)
+    for (const g of RB.wall) B.wall.push(g);   // gable-end walls (stay, not faded)
+    tv.out.roofGeos = RB.roof;                 // slabs → fadeable mesh
+  } else {
+    addRoof(B, style, spot, w, d, wallTop, rot);
+  }
 
   // ---- half-timber frame (corsair / tidebound) ----
   if (style.timber) {
@@ -684,6 +753,11 @@ function addBuilding(B, style, faction, kind, spot, dims, rot, rng, field, geo) 
   if (kind === 'tavern' || kind === 'manor' || kind === 'warehouse') {
     const bp = LW(w * 0.32, wallTop - 0.2, d / 2 + 0.06);
     addBanner(B, style, bp.x, bp.y, bp.z, 0.9, 2.4, rot);
+  }
+
+  // ---- inhabited tavern interior + walkable floor + threshold ----
+  if (kind === 'tavern' && tv) {
+    addTavernInterior(B, style, LW, spot, w, d, h, rot, floorY, field, rng, tv);
   }
 
   return doorPosition;
@@ -798,6 +872,125 @@ function addTavernSign(B, style, LW, floorY, w, d, h, rot) {
   addLampGlass(B, lp.x, floorY + 2.2, lp.z, 0.22);
   const bracket = new THREE.CylinderGeometry(0.04, 0.04, 0.5, 5);
   bracket.rotateZ(Math.PI / 2); bracket.rotateY(rot); bracket.translate(lp.x, floorY + 2.3, lp.z); B.metal.push(bracket);
+}
+
+// The tavern body: three solid walls + a plaza-facing (+Z) wall split around an
+// OPEN doorway (two piers + a lintel), plus dark inner jambs so the gap reads as
+// a deep, shadowed entrance. Replaces the plain body box for the tavern only.
+function addTavernShell(B, LW, spot, w, d, h, rot, floorY) {
+  const tw = 0.34;                 // wall thickness
+  const yc = floorY + h / 2;
+  const box = (bucket, lx, ly, lz, sx, sy, sz) => {
+    const g = new THREE.BoxGeometry(sx, sy, sz);
+    g.rotateY(rot);
+    const p = LW(lx, ly, lz);
+    g.translate(p.x, p.y, p.z); bucket.push(g);
+  };
+  box(B.wall, 0, yc, -d / 2 + tw / 2, w, h, tw);          // back (-Z)
+  box(B.wall, -w / 2 + tw / 2, yc, 0, tw, h, d);          // left (-X)
+  box(B.wall, w / 2 - tw / 2, yc, 0, tw, h, d);           // right (+X)
+  const doorGap = Math.min(1.8, w * 0.34);
+  const doorH = Math.min(2.4, h - 0.6);
+  const segW = (w - doorGap) / 2;
+  const segCx = (w + doorGap) / 4;                        // |x| centre of each pier
+  box(B.wall, -segCx, yc, d / 2 - tw / 2, segW, h, tw);   // front pier, door-left
+  box(B.wall, segCx, yc, d / 2 - tw / 2, segW, h, tw);    // front pier, door-right
+  const lintelH = h - doorH;
+  if (lintelH > 0.08) box(B.wall, 0, floorY + doorH + lintelH / 2, d / 2 - tw / 2, doorGap, lintelH, tw);
+  // dark inner jambs framing the opening → a shadowed recess
+  for (const s of [-1, 1]) {
+    box(B.dark, s * doorGap / 2, floorY + doorH / 2, d / 2 - tw, 0.12, doorH, tw * 1.7);
+  }
+}
+
+// The lived-in interior: plank floor, a bar with shelves/bottles/kegs, stools,
+// tables & benches, a hearth and hanging lanterns — all merged into the shared
+// buckets B. Also pushes the walkable floor + a stepped doorway threshold onto
+// tv.walkSurfaces, and hands footprint/light data back through tv.out.
+function addTavernInterior(B, style, LW, spot, w, d, h, rot, floorY, field, rng, tv) {
+  const tw = 0.34;
+  const foundH = style.foundation ? 0.7 : 0;   // colonial/concern plinth top
+  const floorLevel = floorY + foundH;
+  // ---- floor planks (skip on stilt homes, which already have a deck) ----
+  let floorTop = floorLevel;
+  if (!style.stilt) {
+    const plank = new THREE.BoxGeometry(w - tw * 2, 0.14, d - tw * 2);
+    plank.rotateY(rot); plank.translate(spot.x, floorLevel + 0.01, spot.z); B.wood.push(plank);
+    floorTop = floorLevel + 0.08;
+  }
+  // ---- bar counter along the back (-Z) wall, facing the door ----
+  const barZ = -d / 2 + tw + 0.45, barW = w * 0.62;
+  { const p = LW(0, floorTop + 0.525, barZ);
+    const g = new THREE.BoxGeometry(barW, 1.05, 0.55); g.rotateY(rot); g.translate(p.x, p.y, p.z); B.wood.push(g); }
+  { const p = LW(0, floorTop + 1.06, barZ);
+    const g = new THREE.BoxGeometry(barW + 0.25, 0.09, 0.68); g.rotateY(rot); g.translate(p.x, p.y, p.z); B.trim.push(g); }
+  // back shelves + bottles
+  for (const sy of [floorTop + h * 0.34, floorTop + h * 0.52]) {
+    const p = LW(0, sy, -d / 2 + tw + 0.16);
+    const sh = new THREE.BoxGeometry(barW, 0.06, 0.24); sh.rotateY(rot); sh.translate(p.x, p.y, p.z); B.wood.push(sh);
+    const n = Math.max(4, Math.round(barW / 0.5));
+    for (let i = 0; i < n; i++) {
+      const bx = (i / (n - 1) - 0.5) * (barW - 0.4);
+      const bp = LW(bx, sy + 0.2, -d / 2 + tw + 0.16);
+      const bot = new THREE.CylinderGeometry(0.05, 0.06, 0.34, 6); bot.translate(bp.x, bp.y, bp.z);
+      (i % 3 === 0 ? B.trim : B.dark).push(bot);
+    }
+  }
+  // a lit candle on the bar + a keg + barrels behind
+  { const p = LW(barW * 0.32, floorTop + 1.16, barZ); addLampGlass(B, p.x, p.y, p.z, 0.07); }
+  { const p = LW(-barW * 0.3, floorTop, barZ); addBarrel(B, p.x, p.y + 0.42, p.z, 0); }
+  for (const s of [-1, 1]) { const p = LW(s * barW * 0.42, floorTop, -d / 2 + tw + 0.5); addBarrel(B, p.x, p.y + 0.42, p.z, rng() * 6.28); }
+  // ---- stools along the bar ----
+  for (const sx of [-barW * 0.3, 0, barW * 0.3]) {
+    const p = LW(sx, floorTop, barZ + 0.85);
+    const post = new THREE.CylinderGeometry(0.055, 0.07, 0.62, 6); post.translate(p.x, p.y + 0.31, p.z); B.wood.push(post);
+    const seat = new THREE.CylinderGeometry(0.22, 0.22, 0.09, 8); seat.translate(p.x, p.y + 0.64, p.z); B.wood.push(seat);
+  }
+  // ---- two tables with benches in the open floor ----
+  for (const [tx, tz] of [[-w * 0.22, d * 0.14], [w * 0.24, d * 0.02]]) {
+    const c = LW(tx, floorTop, tz);
+    const post = new THREE.CylinderGeometry(0.1, 0.12, 0.78, 6); post.translate(c.x, c.y + 0.39, c.z); B.wood.push(post);
+    const top = new THREE.CylinderGeometry(0.62, 0.62, 0.08, 12); top.translate(c.x, c.y + 0.8, c.z); B.wood.push(top);
+    for (const bs of [-1, 1]) {
+      const bp = LW(tx + bs * 0.95, floorTop, tz);
+      const bseat = new THREE.BoxGeometry(0.4, 0.09, 1.1); bseat.rotateY(rot); bseat.translate(bp.x, bp.y + 0.46, bp.z); B.wood.push(bseat);
+      for (const lz2 of [-0.42, 0.42]) {
+        const lp = LW(tx + bs * 0.95, floorTop, tz + lz2);
+        const leg = new THREE.CylinderGeometry(0.05, 0.05, 0.46, 5); leg.translate(lp.x, lp.y + 0.23, lp.z); B.wood.push(leg);
+      }
+    }
+  }
+  // ---- hearth in the back corner (stone surround + emissive fire) ----
+  {
+    const surH = Math.min(1.8, h * 0.5);
+    const hp = LW(w / 2 - tw - 0.7, floorTop + surH / 2, -d / 2 + tw + 0.3);
+    const sur = new THREE.BoxGeometry(1.3, surH, 0.5); sur.rotateY(rot); sur.translate(hp.x, hp.y, hp.z); B.stone.push(sur);
+    const fp = LW(w / 2 - tw - 0.7, floorTop + 0.35, -d / 2 + tw + 0.55);
+    const fire = new THREE.BoxGeometry(0.7, 0.5, 0.2); fire.rotateY(rot); fire.translate(fp.x, fp.y, fp.z); B.lamp.push(fire);
+  }
+  // ---- hanging lanterns from the ceiling ----
+  const ceilY = floorY + h - 0.25;
+  for (const lx of [-w * 0.22, w * 0.22]) {
+    const top = LW(lx, ceilY, d * 0.04), lo = LW(lx, floorTop + h * 0.62, d * 0.04);
+    B.metal.push(link(top.x, top.y, top.z, lo.x, lo.y + 0.18, lo.z, 0.02, 4));
+    addLampGlass(B, lo.x, lo.y, lo.z, 0.16);
+  }
+  // ---- walkable interior floor + stepped doorway threshold ----
+  tv.walkSurfaces.push({ x: spot.x, z: spot.z, rot, hw: w / 2 - tw, hd: d / 2 - tw, y: floorTop });
+  const ap = LW(0, 0, d / 2 + 1.4);
+  const groundOut = field.heightAt(ap.x, ap.z);
+  const climb = floorTop - groundOut;                        // may be tiny, or ~1.45 on stilts
+  const n = Math.min(6, Math.max(1, Math.ceil(Math.abs(climb) / 0.4)));
+  const rampLen = Math.max(1.4, Math.abs(climb) * 1.6 + 1.0);
+  const bandW = rampLen / n, innerLz = d / 2 - tw;
+  for (let i = 0; i < n; i++) {
+    const c = LW(0, 0, innerLz + bandW * (i + 0.5));
+    tv.walkSurfaces.push({ x: c.x, z: c.z, rot, hw: 1.05, hd: bandW / 2 + 0.12, y: floorTop - climb * (i / n) });
+  }
+  // ---- hand footprint + interior light back to buildPort ----
+  tv.out.cx = spot.x; tv.out.cz = spot.z; tv.out.rot = rot;
+  tv.out.halfW = w / 2; tv.out.halfD = d / 2;
+  tv.out.lightPos = { x: spot.x, y: floorTop + h * 0.45, z: spot.z };
 }
 
 function addSlipway(B, field, spot, geo, rng) {
