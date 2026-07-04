@@ -24,8 +24,8 @@
     #boot .flag { font-size: 64px; letter-spacing: 6px; animation: bob 3s ease-in-out infinite; }
     #boot h1 { font-size: 34px; font-weight: normal; letter-spacing: 10px; margin: 18px 0 6px; text-transform: uppercase; }
     #boot p { opacity: 0.6; font-style: italic; letter-spacing: 2px; }
-    #boot .bar { width: 240px; height: 3px; background: #1d2c39; margin-top: 26px; border-radius: 2px; overflow: hidden; }
-    #boot .bar i { display: block; height: 100%; width: 40%; background: #c9a24b; border-radius: 2px; animation: load 1.6s ease-in-out infinite; }
+    #boot .boot-bar { flex: none; width: 240px; height: 3px; background: #1d2c39; margin-top: 26px; border-radius: 2px; overflow: hidden; }
+    #boot .boot-bar i { display: block; height: 100%; width: 40%; background: #c9a24b; border-radius: 2px; animation: load 1.6s ease-in-out infinite; }
     @keyframes bob { 0%,100% { transform: translateY(0) rotate(-2deg);} 50% { transform: translateY(-8px) rotate(2deg);} }
     @keyframes load { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
   </style>
@@ -37,7 +37,7 @@
     <div class="flag">⚑</div>
     <h1>WhiteFlagPirates</h1>
     <p>setting sail for the Meridian Verge…</p>
-    <div class="bar"><i></i></div>
+    <div class="boot-bar"><i></i></div>
   </div>
   <script type="module" src="/src/main.js"></script>
 </body>

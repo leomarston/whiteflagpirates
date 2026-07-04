@@ -329,7 +329,13 @@ window.addEventListener('beforeunload', () => {
 // drop the boot veil once the first real frame is out
 requestAnimationFrame(() => {
   setTimeout(() => {
-    document.getElementById('boot')?.classList.add('done');
+    const boot = document.getElementById('boot');
+    if (boot) {
+      boot.classList.add('done');
+      // belt-and-suspenders: fully remove it after the fade so no stray CSS
+      // (e.g. a class collision) can leave the veil covering the title screen
+      setTimeout(() => { boot.style.display = 'none'; }, 1400);
+    }
     events.emit('game:ready');
   }, 600);
 });
