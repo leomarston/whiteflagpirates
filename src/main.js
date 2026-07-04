@@ -24,6 +24,7 @@ import { PlayerShip } from './ship/playerShip.js';
 import { Effects } from './combat/effects.js';
 import { NavalCombat } from './combat/naval.js';
 import { EnemyFleet } from './combat/enemyAI.js';
+import { Boarding } from './combat/boarding.js';
 import { Character } from './character/player.js';
 import { NPCManager } from './character/npc.js';
 import { Animals } from './character/animals.js';
@@ -102,6 +103,7 @@ construct('npcs', NPCManager);
 construct('animals', Animals);
 construct('economy', Economy);
 construct('crew', Crew);
+construct('boarding', Boarding);
 construct('quests', Quests);
 construct('treasure', Treasure);
 construct('progression', Progression);
@@ -242,6 +244,9 @@ function checkDiscovery(dt) {
 // return-to-ship interaction in foot mode
 function checkBoardOwnShip() {
   if (ctx.mode !== 'foot' || !ctx.character || !ctx.playerShip?.ship) return;
+  // during a boarding melee the deck is a battlefield, not the helm — don't let
+  // "take the helm" strand the fight.
+  if (ctx.boarding?.active) { events.emit('prompt', { id: 'board', text: null }); return; }
   const shipPos = ctx.playerShip.ship.group.position;
   const d = ctx.character.position.distanceTo(shipPos);
   const near = d < Math.max(14, (ctx.playerShip.ship.type?.length ?? 20) * 0.75);
@@ -291,7 +296,7 @@ function renderWithShake(dt) {
 const order = [
   'weather', 'sky', 'ocean', 'world',
   'ships', 'playerShip', 'enemies', 'combat', 'effects',
-  'character', 'npcs', 'animals',
+  'character', 'npcs', 'boarding', 'animals',
   'economy', 'crew', 'quests', 'treasure', 'progression', 'encounters',
   'audio', 'music', 'shanty',
 ];

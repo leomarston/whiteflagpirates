@@ -140,6 +140,9 @@ export class World {
     this.islands = [];
     this.diveSpots = [];
     this.lava = [];
+    // transient walkable rects (e.g. a boarding platform lashed between two
+    // ships) that getWalkHeight composites on top of terrain/port decks.
+    this.dynamicSurfaces = [];
     this.group = new THREE.Group();
     this.group.name = 'world';
     ctx.scene.add(this.group);
@@ -287,22 +290,39 @@ export class World {
     return best ? { island: best, port: best.port, distance: bestD } : null;
   }
 
-  /** Highest walkable surface at (x,z): terrain or a port deck rect. */
+  /** Highest walkable surface at (x,z): terrain, a port deck rect, or a
+   *  transient dynamic surface (boarding platform). */
   getWalkHeight(x, z) {
     let h = this.field.heightAt(x, z);
     for (const port of this.ports) {
-      for (const s of port.walkSurfaces) {
-        // into surface space: local +Z runs along the rect's heading (rot)
-        const dx = x - s.x;
-        const dz = z - s.z;
-        const sin = Math.sin(s.rot);
-        const cos = Math.cos(s.rot);
-        const lx = dx * cos - dz * sin;
-        const lz = dx * sin + dz * cos;
-        if (Math.abs(lx) <= s.hw && Math.abs(lz) <= s.hd && s.y > h) h = s.y;
-      }
+      for (const s of port.walkSurfaces) h = this._rectHeight(x, z, s, h);
     }
+    for (const s of this.dynamicSurfaces) h = this._rectHeight(x, z, s, h);
     return h;
+  }
+
+  /** Raise h to a rotated rect's y if (x,z) falls inside it. */
+  _rectHeight(x, z, s, h) {
+    // into surface space: local +Z runs along the rect's heading (rot)
+    const dx = x - s.x;
+    const dz = z - s.z;
+    const sin = Math.sin(s.rot);
+    const cos = Math.cos(s.rot);
+    const lx = dx * cos - dz * sin;
+    const lz = dx * sin + dz * cos;
+    if (Math.abs(lx) <= s.hw && Math.abs(lz) <= s.hd && s.y > h) return s.y;
+    return h;
+  }
+
+  /** Register a transient walkable rect; returns it so the caller can remove it. */
+  addDynamicSurface(surface) {
+    this.dynamicSurfaces.push(surface);
+    return surface;
+  }
+
+  removeDynamicSurface(surface) {
+    const i = this.dynamicSurfaces.indexOf(surface);
+    if (i >= 0) this.dynamicSurfaces.splice(i, 1);
   }
 
   /** Alias kept for callers that expect the spot-height name (see contract). */

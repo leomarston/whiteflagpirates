@@ -12,7 +12,12 @@ export class Crew {
     ctx.events?.on('game:start', ({ fresh }) => {
       if (fresh || !(ctx.state.data.crew?.length)) this._starterCrew();
     });
-    ctx.events?.on('boarding:accept', ({ ship }) => this._resolveBoarding(ship));
+    ctx.events?.on('boarding:accept', ({ ship }) => {
+      // Prefer the playable melee set-piece; fall back to the abstract resolve
+      // if the boarding system or an on-foot fight isn't available.
+      if (this.ctx.boarding?.canBoard?.(ship)) this.ctx.boarding.begin(ship);
+      else this._resolveBoarding(ship);
+    });
     ctx.events?.on('ship:sunk', ({ byPlayer }) => {
       if (byPlayer) this._moraleAll(6, 'a prize taken');
     });
@@ -119,15 +124,25 @@ export class Crew {
     if (why && delta > 0) this.ctx.state.addLog(`Crew spirits lifted — ${why}.`);
   }
 
+  // Abstract (dice-roll) boarding — used only when the playable melee can't run.
   _resolveBoarding(ship) {
-    const ctx = this.ctx;
     const ours = this.boardingStrength();
     const theirs = (ship?.crewCount ?? 8) * 1.6 * (0.5 + (ship?.hull ?? 1) / Math.max(ship?.hullMax ?? 1, 1));
     const p = ours / (ours + theirs);
     const victory = Math.random() < clamp(p, 0.15, 0.95);
+    this.applyBoardingOutcome(ship, victory);
+  }
+
+  /** Book the result of a boarding (loot, casualties, morale, log, event).
+   *  Called by the playable melee with a decided outcome, or by the dice roll.
+   *  `heavy` losses (a hard-fought or lost fight) claim more of the crew. */
+  applyBoardingOutcome(ship, victory, { heavy = false } = {}) {
+    const ctx = this.ctx;
     const casualties = [];
     const roster = this.roster;
-    const losses = victory ? (Math.random() < 0.4 ? 1 : 0) : randInt(Math.random, 1, Math.min(2, roster.length));
+    const losses = victory
+      ? (Math.random() < (heavy ? 0.7 : 0.35) ? 1 : 0)
+      : randInt(Math.random, 1, Math.min(heavy ? 3 : 2, roster.length));
     for (let i = 0; i < losses && roster.length > 1; i++) {
       const idx = Math.floor(Math.random() * roster.length);
       casualties.push(roster[idx].name);
@@ -142,7 +157,7 @@ export class Crew {
       ctx.state.addLog(`Boarded ${ship?.name ?? 'a prize'} — ${lootGold} sovereigns in the strongbox.`);
     } else {
       this._moraleAll(-10);
-      ctx.state.addLog(`Repelled boarding ${ship?.name ?? 'a prize'}. ${casualties.join(', ') || 'No one'} lost.`);
+      ctx.state.addLog(`Repelled at ${ship?.name ?? 'a prize'}. ${casualties.join(', ') || 'No one'} lost.`);
     }
     ctx.events?.emit('boarding:resolve', { victory, lootGold, casualties, ship });
     ctx.events?.emit('crew:change', {});
