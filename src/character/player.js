@@ -2,7 +2,7 @@
 // spring/collision follow camera, responsive sprint/dodge/jump, and swimming.
 import * as THREE from 'three';
 import { PLAYER } from '../core/constants.js';
-import { angleDamp, clamp, damp, lerp } from '../core/utils.js';
+import { angleDamp, clamp, damp, lerp, wrapAngle } from '../core/utils.js';
 import {
   animAttack, animBlock, animDeath, animHit, animIdle, animLand, animSwim, animWalk,
   buildHumanoid, resetPose,
@@ -206,9 +206,19 @@ export class Character {
         this.facing = angleDamp(this.facing, Math.atan2(this._velX, this._velZ), 12, dt);
       }
     }
-    // attacks / blocks face where the camera looks
+    // attacks / blocks face where the camera looks; while committing a swing,
+    // steer gently toward the locked foe so blows read as aimed (choreographed).
     if (this.sword.attacking || this.sword.blocking) {
-      this.facing = angleDamp(this.facing, this._camYaw + Math.PI, 14, dt);
+      let aim = this._camYaw + Math.PI;
+      const foc = this.sword.focusTarget;
+      if (foc && foc.alive && this.sword.attacking) {
+        _move.subVectors(foc.position, this.position);
+        if (_move.lengthSq() > 1e-4) {
+          const toFoc = Math.atan2(_move.x, _move.z);
+          aim += wrapAngle(toFoc - aim) * 0.5; // half-way bias, not a hard snap
+        }
+      }
+      this.facing = angleDamp(this.facing, aim, 14, dt);
     }
 
     // --- vertical ---

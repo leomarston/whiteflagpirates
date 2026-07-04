@@ -15,6 +15,10 @@ export class Encounters {
   constructor(ctx) {
     this.ctx = ctx;
     this._timer = 50;
+    // periodic, low-frequency nudge for the legendary set-piece (the Ashen
+    // Verdict). It self-gates on cooldown/threshold/open water, so we can poke
+    // it liberally without spawning her often.
+    this._legendTimer = randRange(Math.random, 90, 150);
   }
 
   _roll() {
@@ -100,6 +104,14 @@ export class Encounters {
     if (this._timer <= 0) {
       this._timer = randRange(Math.random, 45, 85);
       this._fire(this._roll());
+    }
+
+    // rare rumour of the legendary hunter — additive, never displaces the
+    // ordinary encounter roll above.
+    this._legendTimer -= dt;
+    if (this._legendTimer <= 0) {
+      this._legendTimer = randRange(Math.random, 120, 210);
+      if (Math.random() < 0.5) ctx.setpiece?.requestSpawn?.('rumour');
     }
   }
 }

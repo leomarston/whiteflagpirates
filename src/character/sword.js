@@ -10,6 +10,7 @@ const _dir = new THREE.Vector3();
 const _hit = new THREE.Vector3();
 const _tipV = new THREE.Vector3();
 const _baseV = new THREE.Vector3();
+const _proj = new THREE.Vector3();   // world→screen for the focus reticle
 
 const TRAIL_SEGS = 14;                 // ribbon cross-sections - 1
 const TRAIL_ROWS = TRAIL_SEGS + 1;
@@ -38,6 +39,11 @@ export class SwordCombat {
     this._riposte = false;  // next strike is an empowered riposte
     this._lmbHold = 0;
 
+    // soft lock-on / execution finisher (additive; read by other systems)
+    this.focusTarget = null;   // nearest live hostile in the forward cone
+    this._finisherCd = 0;      // rate-limit so finishers punctuate, not spam
+    this._finisherReady = false;
+
     this.sword = buildCutlass();
     character.rig.bones.handR.add(this.sword);
     this._tip = this.sword.userData?.tip ?? this.sword;
@@ -63,9 +69,16 @@ export class SwordCombat {
     character.rig.bones.root.add(pistol);
 
     this._buildTrail(ctx);
+    this._buildFocusOverlay();
 
     ctx.events?.on('mode:change', ({ mode }) => {
-      if (mode !== 'foot') this._killTrail();
+      if (mode !== 'foot') {
+        this._killTrail();
+        this.focusTarget = null;
+        this.ch.focusTarget = null;
+        this._finisherReady = false;
+        this._hideFocusOverlay();
+      }
     });
   }
 
@@ -148,6 +161,126 @@ export class SwordCombat {
     if (this._trail) this._trail.visible = false;
   }
 
+  // ---- soft lock-on reticle (self-injected DOM overlay, pooled) -----------
+  _buildFocusOverlay() {
+    if (typeof document === 'undefined' || !document.head) return;
+    const style = document.createElement('style');
+    style.id = 'sword-focus-style';
+    style.textContent = `
+      #sword-focus { position:fixed; left:0; top:0; width:0; height:0;
+        pointer-events:none; z-index:12; display:none;
+        font:600 12px/1 ui-monospace,Menlo,Consolas,monospace; }
+      #sword-focus .sf-ret { position:absolute; left:0; top:0; width:54px; height:54px;
+        transform:translate(-50%,-50%); opacity:.82;
+        transition:opacity .12s ease, transform .12s ease; }
+      #sword-focus .sf-c { position:absolute; width:14px; height:14px;
+        border:2px solid rgba(201,162,75,.92);
+        box-shadow:0 0 3px rgba(0,0,0,.55); }
+      #sword-focus .sf-tl { left:0; top:0; border-right:0; border-bottom:0; }
+      #sword-focus .sf-tr { right:0; top:0; border-left:0; border-bottom:0; }
+      #sword-focus .sf-bl { left:0; bottom:0; border-right:0; border-top:0; }
+      #sword-focus .sf-br { right:0; bottom:0; border-left:0; border-top:0; }
+      #sword-focus .sf-tag { position:absolute; left:0; top:34px;
+        transform:translate(-50%,0); white-space:nowrap;
+        color:#f3d9a0; text-shadow:0 1px 3px rgba(0,0,0,.85);
+        letter-spacing:.06em; opacity:0; transition:opacity .12s ease; }
+      #sword-focus.sf-ready .sf-ret { transform:translate(-50%,-50%) scale(1.12);
+        animation:sf-pulse .7s ease-in-out infinite; }
+      #sword-focus.sf-ready .sf-c { border-color:rgba(224,84,66,.96); }
+      #sword-focus.sf-ready .sf-tag { opacity:1; color:#ff9d8a; }
+      @keyframes sf-pulse { 0%,100%{opacity:.75} 50%{opacity:1} }
+    `;
+    document.head.appendChild(style);
+    const root = document.createElement('div');
+    root.id = 'sword-focus';
+    root.innerHTML =
+      '<div class="sf-ret"><span class="sf-c sf-tl"></span><span class="sf-c sf-tr"></span>' +
+      '<span class="sf-c sf-bl"></span><span class="sf-c sf-br"></span></div>' +
+      '<div class="sf-tag">R — Finish him</div>';
+    (document.body ?? document.documentElement).appendChild(root);
+    this._ov = root;
+  }
+
+  _hideFocusOverlay() {
+    if (this._ov) this._ov.style.display = 'none';
+  }
+
+  /** Track the nearest live hostile within a forward cone and drive the reticle. */
+  _updateFocus() {
+    const ctx = this.ctx;
+    const ch = this.ch;
+    const hostiles = ctx.npcs?.hostiles;
+    let best = null, bestScore = Infinity;
+    if (hostiles) {
+      for (const h of hostiles) {
+        if (!h || !h.alive) continue;
+        _dir.subVectors(h.position, ch.position);
+        const dist = _dir.length();
+        if (dist > 9 || dist < 1e-3) continue;
+        const ang = Math.abs(wrapAngle(Math.atan2(_dir.x, _dir.z) - ch.facing));
+        if (ang > 1.0) continue;           // roughly ahead of the captain
+        const score = dist + ang * 2.2;    // favour close and centred
+        if (score < bestScore) { bestScore = score; best = h; }
+      }
+    }
+    this.focusTarget = best;
+    ch.focusTarget = best;                 // mirror for other systems
+
+    // finisher becomes available on a wounded foe inside lunge range
+    let ready = false;
+    if (best) {
+      _dir.subVectors(best.position, ch.position);
+      const d = _dir.length();
+      const frac = (best.hp ?? 1) / (best.hpMax || 1);
+      ready = frac <= 0.28 && d <= 2.8 && this._finisherCd <= 0
+        && !ch.isSwimming && !this.blockHeld;
+    }
+    this._finisherReady = ready;
+    this._drawFocusOverlay(best, ready);
+  }
+
+  _drawFocusOverlay(target, ready) {
+    const ov = this._ov;
+    if (!ov) return;
+    const cam = this.ctx.camera;
+    if (!target || !cam) { ov.style.display = 'none'; return; }
+    _proj.copy(target.position); _proj.y += 1.75;
+    _proj.project(cam);
+    if (_proj.z > 1 || _proj.z < -1) { ov.style.display = 'none'; return; } // behind cam
+    const w = window.innerWidth || 1, hgt = window.innerHeight || 1;
+    ov.style.display = 'block';
+    ov.style.left = ((_proj.x * 0.5 + 0.5) * w) + 'px';
+    ov.style.top = ((-_proj.y * 0.5 + 0.5) * hgt) + 'px';
+    if (ready) ov.classList.add('sf-ready'); else ov.classList.remove('sf-ready');
+  }
+
+  /** Decisive counter-kill on the focused, wounded foe — punctuation, not spam. */
+  _performFinisher() {
+    const ctx = this.ctx;
+    const ch = this.ch;
+    const t = this.focusTarget;
+    if (!t || !t.alive) return;
+    _dir.subVectors(t.position, ch.position);
+    const face = Math.atan2(_dir.x, _dir.z);
+    ch.facing = face;                         // snap to face the victim
+    t.applyDamage((t.hp ?? 0) + 999, face);   // outright kill
+    if (t.stagger) t.stagger();
+    _hit.copy(t.position); _hit.y += 1.05;
+    ctx.effects?.sparks(_hit, 16);
+    // flourish: a committed heavy swing sells the moment (skip its arc strike)
+    this.startAttack(true);
+    this.struck = true;
+    ch.animFreeze = 0.14;                      // brief hit-stop
+    ctx.events?.emit('sword:hit', { heavy: true });
+    ctx.events?.emit('shake', { amount: 0.3 });
+    ctx.events?.emit('toast', { text: 'Finisher!', kind: 'combat' });
+    this._finisherCd = 1.5;
+    this.focusTarget = null;
+    ch.focusTarget = null;
+    this._finisherReady = false;
+    this._hideFocusOverlay();
+  }
+
   /** Clear all combat/trail state — called on respawn so a mid-swing death
    *  doesn't leave the blade trail (and attack state) frozen in the world. */
   reset() {
@@ -164,7 +297,11 @@ export class SwordCombat {
     this._lmbHold = 0;
     this._lmbDown = false;
     this._heavyFired = false;
+    this.focusTarget = null;
+    if (this.ch) this.ch.focusTarget = null;
+    this._finisherReady = false;
     this._killTrail();
+    this._hideFocusOverlay();
   }
 
   _updateTrail(dt, swinging) {
@@ -231,9 +368,13 @@ export class SwordCombat {
       if (!h.alive) continue;
       _dir.subVectors(h.position, ch.position);
       const dist = _dir.length();
-      if (dist > reach) continue;
+      // bias the sweep gently toward the locked foe so aimed blows connect
+      const isFocus = h === this.focusTarget;
+      const r = isFocus ? reach + 0.35 : reach;
+      const a = isFocus ? arc + 0.45 : arc;
+      if (dist > r) continue;
       const ang = Math.atan2(_dir.x, _dir.z);
-      if (Math.abs(wrapAngle(ang - facing)) > arc) continue;
+      if (Math.abs(wrapAngle(ang - facing)) > a) continue;
       h.applyDamage(base * (0.9 + Math.random() * 0.2), facing);
       if (heavyImpact && h.stagger) h.stagger();
       hitAny = true;
@@ -290,9 +431,16 @@ export class SwordCombat {
     const ctx = this.ctx;
     const input = ctx.input;
     const ch = this.ch;
-    if (ctx.mode !== 'foot' || ctx.time.paused || !ch.alive) return;
+    if (ctx.mode !== 'foot' || ctx.time.paused || !ch.alive) {
+      if (this.focusTarget) { this.focusTarget = null; ch.focusTarget = null; }
+      this._finisherReady = false;
+      this._hideFocusOverlay();
+      return;
+    }
 
     this.pistolReload = Math.max(0, this.pistolReload - dt);
+    this._finisherCd = Math.max(0, this._finisherCd - dt);
+    this._updateFocus();
     if (this._riposteT >= 0) {
       this._riposteT += dt;
       if (this._riposteT >= 0.7) this._riposteT = -1;
@@ -358,6 +506,11 @@ export class SwordCombat {
     }
 
     if (input.wasPressed('KeyF')) this.firePistol();
+
+    // execution finisher on a wounded, focused foe (KeyR — unbound elsewhere)
+    if (this._finisherReady && this.attackT < 0 && input.wasPressed('KeyR')) {
+      this._performFinisher();
+    }
   }
 
   startDodge(dirX, dirZ) {

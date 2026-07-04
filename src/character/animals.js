@@ -112,8 +112,9 @@ export class Animals {
     this.sharkBody = new THREE.Mesh(mergeAll([sBody, sTail]), sharkMat);
     this.sharkBody.visible = false; this.sharkBody.castShadow = false;
     ctx.scene.add(this.sharkBody);
-    this.shark = { angle: 0, radius: 9, biteTimer: 8, lunge: 0, active: false };
+    this.shark = { angle: 0, radius: 9, biteTimer: 8, lunge: 0, active: false, linger: 0 };
     this._sharkWarn = 0;
+    this._sharkStrikeWarn = 0;
 
     // ---- reef fish: shimmering swirl at dive spots -------------------------
     const fishGeo = new THREE.PlaneGeometry(0.22, 0.09);
@@ -321,10 +322,14 @@ export class Animals {
     }
   }
 
-  // -- shark: circles the swimmer, tightens & lunges in for a telegraphed bite
+  // -- shark: circles the swimmer, tightens & lunges in for a telegraphed bite.
+  //    On the surface it stays ambient (occasional, well-signalled bite); when
+  //    the player DIVES and lingers below, menace builds — it wheels in tighter,
+  //    telegraphs harder and strikes sooner, so wreck-diving carries real risk.
   _updateShark(dt, t) {
     const ch = this.ctx.character;
     const swimming = this.ctx.mode === 'foot' && ch?.isSwimming;
+    const diving = swimming && !!ch?.underwater;
     let deepWater = false;
     if (swimming) {
       const ground = this.ctx.world?.getTerrainHeight?.(ch.position.x, ch.position.z) ?? 0;
@@ -346,23 +351,35 @@ export class Animals {
     }
     if (!deepWater) this.shark.active = false;
     if (this._sharkWarn > 0) this._sharkWarn -= dt;
+    if (this._sharkStrikeWarn > 0) this._sharkStrikeWarn -= dt;
+
+    const sh = this.shark;
+    // menace builds while the diver lingers below and bleeds off at the surface
+    sh.linger = damp(sh.linger, diving && this.shark.active ? 1 : 0, diving ? 0.35 : 1.4, dt);
+    const aggro = this.shark.active ? clamp(sh.linger, 0, 1) : 0;
 
     this.sharkFin.visible = this.shark.active;
     this.sharkBody.visible = this.shark.active;
     if (!this.shark.active || !ch) return;
 
-    const sh = this.shark;
-    sh.biteTimer -= dt;
+    sh.biteTimer -= dt * (1 + aggro); // bites come sooner the longer you linger
     // telegraph: in the last ~1.2s before a bite, the shark wheels inward fast
     const winding = sh.biteTimer < 1.2 && sh.lunge <= 0;
-    sh.angle += dt * (winding ? 1.4 : 0.7);
-    const targetR = winding ? 2.2 : 8;
+    // a distinct, one-shot strike telegraph only while diving (keeps the surface
+    // shark ambient — it never suddenly turns aggressive up top)
+    if (winding && diving && this._sharkStrikeWarn <= 0) {
+      this._sharkStrikeWarn = 6;
+      this.ctx.events?.emit('toast', { text: 'The shark turns to strike — move!', kind: 'warn' });
+    }
+    sh.angle += dt * (winding ? 1.4 + aggro * 0.8 : 0.7 + aggro * 0.4);
+    const targetR = winding ? 2.2 - aggro * 0.6 : 8 - aggro * 3;
     sh.radius = damp(sh.radius, targetR, winding ? 3.5 : 1.2, dt);
 
     const waterY = this.ctx.ocean?.getHeight(ch.position.x, ch.position.z) ?? 0;
     const cx = ch.position.x + Math.cos(sh.angle) * sh.radius;
     const cz = ch.position.z + Math.sin(sh.angle) * sh.radius;
-    const finY = waterY - 0.1 + Math.sin(t * 2 + sh.angle) * 0.06;
+    // ride lower (submerged) when hunting a diver, break the surface up top
+    const finY = waterY - 0.1 - aggro * 0.9 + Math.sin(t * 2 + sh.angle) * 0.06;
     this.sharkFin.position.set(cx, finY, cz);
     this.sharkBody.position.set(cx, finY - 0.75, cz);
     // heading tangent + a tail-wag yaw wobble
@@ -377,12 +394,15 @@ export class Animals {
     if (sh.lunge > 0) {
       sh.lunge -= dt;
       if (sh.lunge <= 0) {
-        sh.biteTimer = randRange(Math.random, 7, 10);
+        sh.biteTimer = randRange(Math.random, 7, 10) - aggro * 3; // repeats faster when diving
         sh.radius = 12;
-        ch.applyDamage(12, sh.angle);
+        ch.applyDamage(12 + Math.round(aggro * 8), sh.angle);
         this.ctx.effects?.splash(ch.position, 1.3);
         this.ctx.events?.emit('shake', { amount: 0.4 });
-        this.ctx.events?.emit('toast', { text: 'Shark bite! Get to shore!', kind: 'warn' });
+        this.ctx.events?.emit('toast', {
+          text: diving ? 'Shark bite! Get to the surface!' : 'Shark bite! Get to shore!',
+          kind: 'warn',
+        });
       }
     }
   }

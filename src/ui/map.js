@@ -226,7 +226,44 @@ export class MapScreen {
         g.strokeStyle = 'rgba(60,40,15,0.28)';
         g.lineWidth = 1;
         g.stroke();
+        // uncharted mark: a faint queried blot so the gap reads as intentional
+        const ux = toX(isl.position[0]), uy = toY(isl.position[1]);
+        g.font = `${Math.max(12, 15 * Math.min(this.zoom, 1.5))}px Georgia`;
+        g.textAlign = 'center';
+        g.fillStyle = 'rgba(60,40,15,0.24)';
+        g.fillText('?', ux, uy + 5);
       }
+    }
+
+    // surveyed viewpoints: a small beacon icon + the charted extent it unveiled
+    for (const vp of this.ctx.viewpoints?.sites ?? []) {
+      if (!vp?.synced || !vp.position) continue;
+      const vx = toX(vp.position.x), vy = toY(vp.position.z);
+      // dashed ring showing the horizon the survey swept in
+      const rr = (this.ctx.viewpoints?.surveyRadius ?? 1800) * scale;
+      if (rr > 6) {
+        g.save();
+        g.setLineDash([5, 6]);
+        g.strokeStyle = 'rgba(29,111,109,0.28)';
+        g.lineWidth = 1.2;
+        g.beginPath(); g.arc(vx, vy, rr, 0, Math.PI * 2); g.stroke();
+        g.restore();
+      }
+      // little lighthouse beacon: tapered tower + a warm lamp glow
+      g.save();
+      g.strokeStyle = 'rgba(60,40,15,0.85)';
+      g.fillStyle = '#e9d9b0';
+      g.lineWidth = 1.4;
+      g.beginPath();
+      g.moveTo(vx - 3.4, vy + 5); g.lineTo(vx - 2, vy - 4);
+      g.lineTo(vx + 2, vy - 4); g.lineTo(vx + 3.4, vy + 5);
+      g.closePath(); g.fill(); g.stroke();
+      g.fillStyle = 'rgba(230,166,60,0.95)';
+      g.beginPath(); g.arc(vx, vy - 5.5, 2.4, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = 'rgba(230,166,60,0.4)';
+      g.lineWidth = 3;
+      g.beginPath(); g.arc(vx, vy - 5.5, 4, 0, Math.PI * 2); g.stroke();
+      g.restore();
     }
 
     // treasure map X marks (only when the island is discovered)
