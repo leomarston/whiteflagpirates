@@ -180,29 +180,36 @@ export class EnemyFleet {
         ctx.events?.emit('toast', { text: `${ship.name} is moving to engage!`, kind: 'warn' });
       }
       const bearing = Math.atan2(ps.position.x - p.x, ps.position.z - p.z);
-      if (playerDist > 240) {
-        desiredHeading = bearing;
-        desiredSail = 1;
-      } else {
-        // present a broadside: sail perpendicular to the bearing
-        const s1 = bearing + Math.PI / 2;
-        const s2 = bearing - Math.PI / 2;
-        desiredHeading = Math.abs(wrapAngle(ship.physics.heading - s1)) <
-          Math.abs(wrapAngle(ship.physics.heading - s2)) ? s1 : s2;
-        desiredSail = playerDist < 120 ? 0.35 : 0.6;
-        brain.broadsideSide = wrapAngle(bearing - ship.physics.heading) > 0 ? 'R' : 'L';
-      }
-      // fire when the target is in the side arc
       const relBearing = wrapAngle(bearing - ship.physics.heading);
+      // commit to whichever broadside faces the target and hold it
+      brain.broadsideSide = relBearing > 0 ? 'R' : 'L';
       const sideAngle = brain.broadsideSide === 'R' ? Math.PI / 2 : -Math.PI / 2;
-      if (playerDist < 460 && Math.abs(wrapAngle(relBearing - sideAngle)) < 0.22) {
-        // lead the target
+
+      // fight at an optimal broadside range — close if far, sheer off if too near,
+      // run parallel to the quarry when in the band so the guns stay on target.
+      const OPT = 175;
+      if (playerDist > OPT + 90) {
+        desiredHeading = bearing - sideAngle * 0.45; // bear down at an angle
+        desiredSail = 1;
+      } else if (playerDist < OPT - 70) {
+        desiredHeading = bearing + sideAngle;        // sheer away, keep guns bearing
+        desiredSail = 0.75;
+      } else {
+        // in the band: match the quarry's course, nudged to hold them abeam
+        desiredHeading = ps.physics.heading - wrapAngle(relBearing - sideAngle) * 0.6;
+        desiredSail = 0.62;
+      }
+
+      // fire a full broadside when the guns bear, target's in range, and reloaded
+      if (playerDist < 500 && Math.abs(wrapAngle(relBearing - sideAngle)) < 0.28) {
         const flight = playerDist / 90;
         _target.copy(ps.position);
         _target.x += Math.sin(ps.physics.heading) * ps.physics.speed * flight;
         _target.z += Math.cos(ps.physics.heading) * ps.physics.speed * flight;
+        // cripple a fast quarry with chain, else round shot
+        const ammo = (ps.physics.speed > 7 && Math.random() < 0.3) ? 'chain' : 'round';
         ctx.combat?.fireBroadside(ship, brain.broadsideSide, {
-          type: 'round', spreadRad: 0.05, targetPoint: _target,
+          type: ammo, spreadRad: 0.055, targetPoint: _target,
         });
       }
     } else if (brain.state === 'flee') {
