@@ -30,6 +30,10 @@ const CRAB_N = 10;
 const TURTLE_N = 4;
 const JBIRD_N = 8;
 
+// Huntable fauna hit points (harpoon strikes chip these down; see strikeHunt).
+const WHALE_HP = 120;
+const SHARK_HP = 60;
+
 function mergeAll(geos) {
   return mergeGeometries(geos.map((g) => (g.index ? g.toNonIndexed() : g)));
 }
@@ -112,9 +116,37 @@ export class Animals {
     this.sharkBody = new THREE.Mesh(mergeAll([sBody, sTail]), sharkMat);
     this.sharkBody.visible = false; this.sharkBody.castShadow = false;
     ctx.scene.add(this.sharkBody);
-    this.shark = { angle: 0, radius: 9, biteTimer: 8, lunge: 0, active: false, linger: 0 };
+    this.shark = {
+      angle: 0, radius: 9, biteTimer: 8, lunge: 0, active: false, linger: 0,
+      hp: 0, hpMax: SHARK_HP, dead: false, deadT: 0, // harpoon harvest state
+    };
     this._sharkWarn = 0;
     this._sharkStrikeWarn = 0;
+
+    // ---- whale: a lone huntable that periodically surfaces at sea near the
+    //      helm; harpoon it (hunting.js) for oil, hide & the rare lump of
+    //      ambergris, else it spouts and sounds away. Original low-poly mesh:
+    //      a flattened capsule body, a rounded head, a low dorsal ridge, a tail
+    //      stock and a split fluke. The "spout" is a reused spray puff thrown
+    //      from the blowhole while it's up — no new effects API. --------------
+    const whaleMat = new THREE.MeshStandardMaterial({ color: 0x39434c, roughness: 0.72, metalness: 0.05 });
+    const wBody = new THREE.CapsuleGeometry(1.85, 7.2, 6, 12); wBody.rotateX(Math.PI / 2); wBody.scale(1.05, 0.82, 1);
+    const wHead = new THREE.SphereGeometry(1.9, 8, 6); wHead.scale(1.05, 0.8, 1.15); wHead.translate(0, -0.1, 3.7);
+    const wRidge = new THREE.SphereGeometry(0.55, 6, 5); wRidge.scale(1, 0.7, 2.0); wRidge.translate(0, 1.15, -0.4);
+    const wStock = new THREE.CapsuleGeometry(0.55, 1.6, 4, 6); wStock.rotateX(Math.PI / 2); wStock.translate(0, 0.1, -4.0);
+    const flukeL = new THREE.BoxGeometry(1.9, 0.24, 1.35); flukeL.rotateY(0.5); flukeL.translate(-1.15, 0.05, -4.9);
+    const flukeR = new THREE.BoxGeometry(1.9, 0.24, 1.35); flukeR.rotateY(-0.5); flukeR.translate(1.15, 0.05, -4.9);
+    this.whaleMesh = new THREE.Mesh(mergeAll([wBody, wHead, wRidge, wStock, flukeL, flukeR]), whaleMat);
+    this.whaleMesh.visible = false;
+    this.whaleMesh.castShadow = false;
+    ctx.scene.add(this.whaleMesh);
+    this.whale = {
+      state: 'gone', x: 0, z: 0, heading: 0, hp: 0, hpMax: WHALE_HP,
+      life: 0, spawnT: randRange(Math.random, 25, 55), spoutT: 0, sink: 0,
+    };
+    // Stable, reused hunt-target handles (no per-frame/-strike allocation).
+    this._whaleHandle = { kind: 'whale', point: new THREE.Vector3(), label: 'whale', hpFrac: 1 };
+    this._sharkHandle = { kind: 'shark', point: new THREE.Vector3(), label: 'shark', hpFrac: 1 };
 
     // ---- reef fish: shimmering swirl at dive spots -------------------------
     const fishGeo = new THREE.PlaneGeometry(0.22, 0.09);
@@ -189,6 +221,11 @@ export class Animals {
     for (const d of this.dolphins) d.mesh.visible = false;
     this.sharkFin.visible = false;
     this.sharkBody.visible = false;
+    if (this.whaleMesh) this.whaleMesh.visible = false;
+    if (this.whale && this.whale.state !== 'gone') {
+      this.whale.state = 'gone';
+      this.whale.spawnT = randRange(Math.random, 20, 50);
+    }
   }
 
   update(dt) {
@@ -205,6 +242,7 @@ export class Animals {
     this._updateCrabs(dt, t, focus);
     this._updateTurtles(dt, t, focus);
     this._updateJungleBirds(dt, t, focus);
+    this._updateWhale(dt, t, focus);
   }
 
   // -- gulls: shared drifting center; each bird wheels, banks into turns, and
@@ -330,6 +368,12 @@ export class Animals {
     const ch = this.ctx.character;
     const swimming = this.ctx.mode === 'foot' && ch?.isSwimming;
     const diving = swimming && !!ch?.underwater;
+    // harvest cooldown: once harpooned to death it stays gone a while before it
+    // can wheel back in (else deepWater would re-activate it the very next frame)
+    if (this.shark.dead) {
+      this.shark.deadT -= dt;
+      if (this.shark.deadT <= 0) this.shark.dead = false;
+    }
     let deepWater = false;
     if (swimming) {
       const ground = this.ctx.world?.getTerrainHeight?.(ch.position.x, ch.position.z) ?? 0;
@@ -338,12 +382,13 @@ export class Animals {
       if (near && near.distance < 120) deepWater = false;
     }
 
-    if (deepWater && !this.shark.active) {
+    if (deepWater && !this.shark.active && !this.shark.dead) {
       this.shark.active = true;
       this.shark.radius = 13;
       this.shark.biteTimer = 6;
       this.shark.lunge = 0;
       this.shark.angle = Math.random() * TAU;
+      this.shark.hp = SHARK_HP; // fresh quarry each time it commits to the swimmer
       if (this._sharkWarn <= 0) {
         this._sharkWarn = 20;
         this.ctx.events?.emit('toast', { text: 'A fin cuts the water nearby…', kind: 'warn' });
@@ -603,5 +648,148 @@ export class Animals {
       spawned++;
     }
     if (spawned) this.ctx.events?.emit('gull', {});
+  }
+
+  // -- whale: schedules a lone surfacing at sea, glides & spouts while up, and
+  //    sounds (dives) away when its window closes. Placement is guarded to open
+  //    water only; the mesh transform is set in place with zero allocation. ---
+  _updateWhale(dt, t, focus) {
+    const ctx = this.ctx;
+    const w = this.whale;
+    if (!w || !this.whaleMesh) return;
+    const sailing = ctx.mode === 'sail' && !!ctx.playerShip?.ship;
+
+    if (w.state === 'gone') {
+      if (this.whaleMesh.visible) this.whaleMesh.visible = false;
+      if (!sailing || !focus) return;
+      w.spawnT -= dt;
+      if (w.spawnT > 0) return;
+      // surface a little way off the bow, but only over genuinely deep water
+      const ang = randRange(Math.random, 0, TAU);
+      const dist = randRange(Math.random, 48, 92);
+      const sx = focus.x + Math.cos(ang) * dist;
+      const sz = focus.z + Math.sin(ang) * dist;
+      const ground = ctx.world?.getTerrainHeight?.(sx, sz) ?? -100;
+      if (ground > -8) { w.spawnT = randRange(Math.random, 4, 9); return; } // too shallow; retry soon
+      w.x = sx; w.z = sz;
+      w.heading = Math.atan2(focus.x - sx, focus.z - sz) + randRange(Math.random, -0.5, 0.5);
+      w.hp = WHALE_HP; w.hpMax = WHALE_HP;
+      w.life = randRange(Math.random, 18, 26);
+      w.spoutT = 0.25;
+      w.sink = 0;
+      w.state = 'surfaced';
+      ctx.events?.emit('toast', { text: 'A whale surfaces off the bow — harpoon it!', kind: 'discover' });
+      ctx.events?.emit('whale:surface', { x: sx, z: sz });
+    } else if (w.state === 'surfaced') {
+      w.life -= dt;
+      w.x += Math.sin(w.heading) * 2.1 * dt;
+      w.z += Math.cos(w.heading) * 2.1 * dt;
+      w.spoutT -= dt;
+      if (w.spoutT <= 0) {
+        w.spoutT = randRange(Math.random, 3.5, 6.5);
+        const wy = ctx.ocean?.getHeight(w.x, w.z) ?? 0;
+        const bx = w.x + Math.sin(w.heading) * 2.6;
+        const bz = w.z + Math.cos(w.heading) * 2.6;
+        ctx.effects?.splash?.(_p.set(bx, wy + 0.4, bz), 0.85); // blowhole spout
+      }
+      if (w.life <= 0) {
+        w.state = 'diving'; w.sink = 0;
+        ctx.events?.emit('toast', { text: 'The whale sounds and slips beneath the swell.', kind: 'info' });
+      }
+    } else if (w.state === 'diving') {
+      w.sink += dt;
+      w.x += Math.sin(w.heading) * 1.3 * dt;
+      w.z += Math.cos(w.heading) * 1.3 * dt;
+      if (w.sink > 3.4) {
+        w.state = 'gone';
+        w.spawnT = randRange(Math.random, 45, 95);
+        this.whaleMesh.visible = false;
+        return;
+      }
+    }
+
+    // place the mesh at the surface (mostly submerged; back, ridge & flukes show)
+    const wy = ctx.ocean?.getHeight(w.x, w.z) ?? 0;
+    const yOff = -0.75 - (w.state === 'diving' ? w.sink * 1.7 : 0);
+    const pitch = (w.state === 'diving' ? 0.55 : 0) + Math.sin(t * 0.5) * 0.04;
+    this.whaleMesh.position.set(w.x, wy + yOff + Math.sin(t * 0.55) * 0.1, w.z);
+    this.whaleMesh.rotation.set(pitch, -w.heading, Math.sin(t * 0.4) * 0.05);
+    this.whaleMesh.visible = true;
+  }
+
+  // -- harvest API (driven by hunting.js) -----------------------------------
+  /** Nearest surfaced/active huntable within harpoon range of pos, or null.
+   *  Returns a stable, reused handle: { kind, point, label, hpFrac }. */
+  getHuntTarget(pos) {
+    if (!pos) return null;
+    let best = null, bestD = Infinity;
+    const w = this.whale;
+    if (w && w.state === 'surfaced') {
+      const dx = w.x - pos.x, dz = w.z - pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 62 && d < bestD) {
+        const wy = this.ctx.ocean?.getHeight(w.x, w.z) ?? 0;
+        this._whaleHandle.point.set(w.x, wy + 0.6, w.z);
+        this._whaleHandle.hpFrac = clamp(w.hp / (w.hpMax || 1), 0, 1);
+        best = this._whaleHandle; bestD = d;
+      }
+    }
+    const sh = this.shark;
+    if (sh && sh.active && !sh.dead && this.sharkFin) {
+      const dx = this.sharkFin.position.x - pos.x, dz = this.sharkFin.position.z - pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 15 && d < bestD) {
+        this._sharkHandle.point.copy(this.sharkFin.position);
+        this._sharkHandle.hpFrac = clamp(sh.hp / (sh.hpMax || 1), 0, 1);
+        best = this._sharkHandle; bestD = d;
+      }
+    }
+    return best;
+  }
+
+  /** Apply harpoon damage to a handle from getHuntTarget. Returns the material
+   *  yield object once the quarry dies (else null). Guarded; only valid targets. */
+  strikeHunt(target, dmg) {
+    if (!target || !(dmg > 0)) return null;
+    const ctx = this.ctx;
+
+    if (target === this._whaleHandle || target.kind === 'whale') {
+      const w = this.whale;
+      if (!w || w.state !== 'surfaced') return null;
+      w.hp -= dmg;
+      ctx.effects?.sparks?.(_p.copy(target.point), 5);
+      ctx.effects?.splash?.(_p.copy(target.point), 0.6);
+      if (w.hp <= 0) {
+        const oy = ctx.ocean?.getHeight(w.x, w.z) ?? 0;
+        ctx.effects?.splash?.(_p.set(w.x, oy, w.z), 1.7);
+        w.state = 'gone';
+        w.spawnT = randRange(Math.random, 70, 130);
+        this.whaleMesh.visible = false;
+        const out = { oil: 3 + Math.floor(Math.random() * 3), hide: 1 };
+        if (Math.random() < 0.6) out.ambergris = 1;
+        return out;
+      }
+      return null;
+    }
+
+    if (target === this._sharkHandle || target.kind === 'shark') {
+      const sh = this.shark;
+      if (!sh || !sh.active || sh.dead) return null;
+      sh.hp -= dmg;
+      ctx.effects?.sparks?.(_p.copy(target.point), 5);
+      ctx.effects?.splash?.(_p.copy(target.point), 0.5);
+      if (sh.hp <= 0) {
+        sh.active = false;
+        sh.dead = true;
+        sh.deadT = randRange(Math.random, 25, 45);
+        this.sharkFin.visible = false;
+        this.sharkBody.visible = false;
+        ctx.effects?.splash?.(_p.copy(target.point), 1.0);
+        return { hide: 2 };
+      }
+      return null;
+    }
+
+    return null;
   }
 }

@@ -33,6 +33,7 @@ import { Crew } from './systems/crew.js';
 import { Quests } from './systems/quests.js';
 import { Treasure } from './systems/treasure.js';
 import { Progression } from './systems/progression.js';
+import { Hunting } from './systems/hunting.js';
 import { Encounters } from './systems/encounters.js';
 import { Viewpoints } from './systems/viewpoints.js';
 import { NavalSetpiece } from './combat/setpiece.js';
@@ -111,6 +112,7 @@ construct('viewpoints', Viewpoints);
 construct('quests', Quests);
 construct('treasure', Treasure);
 construct('progression', Progression);
+construct('hunting', Hunting);
 construct('encounters', Encounters);
 construct('audio', AudioEngine);
 construct('music', Music);
@@ -300,7 +302,7 @@ function renderWithShake(dt) {
 const order = [
   'weather', 'sky', 'ocean', 'world',
   'ships', 'playerShip', 'enemies', 'setpiece', 'combat', 'effects',
-  'character', 'npcs', 'boarding', 'viewpoints', 'animals',
+  'character', 'npcs', 'boarding', 'viewpoints', 'animals', 'hunting',
   'economy', 'crew', 'quests', 'treasure', 'progression', 'encounters',
   'audio', 'music', 'shanty',
 ];

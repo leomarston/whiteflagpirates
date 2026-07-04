@@ -32,6 +32,18 @@ export const SKILLS = {
   },
 };
 
+// Crafted outfits bought at the Outfitter (hunting.js) with hunted materials
+// (+ a little gold). Each OWNED outfit multiplies its mod into getMod for that
+// key, stacking with the skill-tree tiers — a purely additive extra factor.
+// The keys used here are exactly the ones already consumed via getMod, so owning
+// an outfit takes effect with no consumer changes.
+export const OUTFITS = {
+  whaleGrease:    { label: 'Whale-oil Gun Grease',    desc: '+12% reload speed',  mod: { reloadSpeed: 1.12 },  cost: { oil: 6 },              gold: 120 },
+  hideHold:       { label: 'Cured-hide Hold Lining',  desc: '+15% cargo space',   mod: { cargoBonus: 1.15 },   cost: { hide: 5 },             gold: 150 },
+  boneCarriages:  { label: 'Ambergris-set Carriages', desc: '+12% cannon damage', mod: { cannonDamage: 1.12 }, cost: { ambergris: 2, oil: 4 }, gold: 220 },
+  scrimshawGrips: { label: 'Scrimshaw Pistol Grips',  desc: '+15% pistol damage', mod: { pistolDamage: 1.15 }, cost: { hide: 3, oil: 3 },     gold: 140 },
+};
+
 const XP_SHIP = { cutter: 25, sloop: 30, brig: 50, merchantman: 45, frigate: 70, galleon: 90 };
 // each entry is the exclusive upper bound of its band (repLabel returns the
 // first whose bound the value is below), so 'Hunted' covers the lowest reps
@@ -89,13 +101,22 @@ export class Progression {
     return 'Legend';
   }
 
-  /** Product of all unlocked skill modifiers for a key (default 1). */
+  /** Product of all unlocked skill modifiers for a key (default 1), times any
+   *  owned crafted-outfit factor for that key (additive: purely extra). */
   getMod(key) {
     const skills = this.ctx.state.data.skills ?? {};
     let mod = 1;
     for (const branch of Object.values(SKILLS)) {
       for (const tier of branch.tiers) {
         if (skills[tier.key] && tier.mod[key]) mod *= tier.mod[key];
+      }
+    }
+    // crafted outfits bought with hunted materials stack on top of skill tiers
+    const outfits = this.ctx.state.data.outfits;
+    if (outfits) {
+      for (const id in OUTFITS) {
+        const o = OUTFITS[id];
+        if (outfits[id] && o.mod && o.mod[key]) mod *= o.mod[key];
       }
     }
     if (key === 'shipSpeed') return mod;
