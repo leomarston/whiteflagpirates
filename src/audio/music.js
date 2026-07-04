@@ -242,7 +242,9 @@ export class Music {
     // --- melody: arc to the peak, resolve home to the tonic -----------------
     if (Math.random() < conf.density) {
       const firstHalf = this._beat < 8;
-      const target = firstHalf ? this._peak : 0;
+      // clamp to the ACTIVE scale — _peak may exceed the shorter pentatonic
+      // 'jig' scale after a context switch, which would index undefined -> NaN
+      const target = clamp(firstHalf ? this._peak : 0, 0, scale.length - 1);
       if (Math.abs(target - this._degree) <= 1) {
         this._degree = target;
       } else {

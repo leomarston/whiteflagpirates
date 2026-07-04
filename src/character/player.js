@@ -76,6 +76,7 @@ export class Character {
     this.alive = true;
     this._deathT = -1;
     this._landT = -1;
+    this.sword?.reset?.(); // clear any frozen mid-swing attack/trail from death
     if (this.hp <= 0) this.hp = this.hpMax;
   }
 

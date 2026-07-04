@@ -192,7 +192,7 @@ export class EnemyFleet {
         desiredHeading = bearing - sideAngle * 0.45; // bear down at an angle
         desiredSail = 1;
       } else if (playerDist < OPT - 70) {
-        desiredHeading = bearing + sideAngle;        // sheer away, keep guns bearing
+        desiredHeading = bearing - sideAngle;        // sheer away, keep guns bearing
         desiredSail = 0.75;
       } else {
         // in the band: match the quarry's course, nudged to hold them abeam

@@ -225,7 +225,24 @@ export class Ship {
       }
       this.alive = false;
       this.ctx.scene.remove(g);
+      this.dispose();
     }
+  }
+
+  /** Free per-ship GPU resources. Geometries are per-ship (safe); only the
+   *  per-ship materials are disposed — shared cached materials/textures aren't. */
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    const seen = new Set();
+    this.group.traverse((o) => {
+      if (o.geometry && !seen.has(o.geometry)) { seen.add(o.geometry); o.geometry.dispose(); }
+    });
+    const parts = this.group.userData?.parts;
+    for (const m of [parts?.sailMat, parts?.flagMat, parts?.lanternMat, this.group.userData?.sternWindows]) {
+      m?.dispose?.();
+    }
+    parts?.lanternLight?.dispose?.();
   }
 }
 
@@ -246,6 +263,7 @@ export class ShipManager {
     if (i >= 0) this.list.splice(i, 1);
     if (ship.group.parent) this.ctx.scene.remove(ship.group);
     ship.alive = false;
+    ship.dispose?.();
   }
 
   update(dt) {

@@ -50,8 +50,10 @@ void main() {
 
   float shore = texture2D(uShoreTex, shoreUv(p)).r;
   vShore = shore;
-  // waves shrink over shallows so surf hugs the beach instead of clipping it
-  float amp = uAmp * (1.0 - shore * 0.72);
+  // amplitude MUST mirror the CPU sampleOceanHeight (frozen) exactly, or ships
+  // float out of sync with the rendered sea at docks. Beach calm is handled
+  // visually (foam/shore tint), never by shrinking the geometry here.
+  float amp = uAmp;
 
   vec3 disp = vec3(0.0);
   vec3 tang = vec3(1.0, 0.0, 0.0);

@@ -162,13 +162,15 @@ export class World {
     }
 
     this.vegetation = buildVegetation(ctx, this);
-    this.props = buildProps(ctx, this);
+    // Ports must build before props so the harbour buoys can key off each
+    // port's real dock bearing (rec.port.dockHeading) instead of guessing.
     const ports = buildPorts(ctx, this);
     for (const port of ports) {
       const rec = this.islands.find((i) => i.def.id === port.islandId);
       if (rec) rec.port = port;
     }
     this.ports = ports;
+    this.props = buildProps(ctx, this);
   }
 
   _buildIsland(def, material) {

@@ -102,11 +102,23 @@ export function buildProps(ctx, world) {
   const buoyItems = [];
   for (const isl of world.islands) {
     if (!isl.def.port) continue;
-    const ap = harborApproach(field, isl);
-    if (!ap) continue;
-    const px = isl.center.x + ap.dx * (ap.deep + 20);
-    const pz = isl.center.z + ap.dz * (ap.deep + 20);
-    const perpX = ap.dz, perpZ = -ap.dx; // unit perpendicular
+    // Prefer the port's real dock bearing (built just before props) so the
+    // channel markers flank the actual pier; fall back to a local scan only
+    // if the port is missing for some reason.
+    let dx, dz, px, pz;
+    if (isl.port) {
+      const heading = isl.port.dockHeading ?? 0;
+      dx = Math.sin(heading); dz = Math.cos(heading);
+      px = isl.port.dockPosition.x + dx * 12;
+      pz = isl.port.dockPosition.z + dz * 12;
+    } else {
+      const ap = harborApproach(field, isl);
+      if (!ap) continue;
+      dx = ap.dx; dz = ap.dz;
+      px = isl.center.x + ap.dx * (ap.deep + 20);
+      pz = isl.center.z + ap.dz * (ap.deep + 20);
+    }
+    const perpX = dz, perpZ = -dx; // unit perpendicular
     buoyItems.push({ x: px + perpX * 8, z: pz + perpZ * 8, phase: rng() * TAU, port: true }); // starboard (green)
     buoyItems.push({ x: px - perpX * 8, z: pz - perpZ * 8, phase: rng() * TAU, port: false }); // port (red)
   }
@@ -303,6 +315,16 @@ export function buildProps(ctx, world) {
     const sunY = ctx.sky?.sunDir?.y ?? Math.sin((ctx.time.dayFrac - 0.25) * TAU);
     return 1 - clamp01((sunY + 0.12) / 0.22);
   };
+
+  // Wreck salvage is session state (not persisted), so re-arm every dive spot
+  // whenever a game begins — otherwise a New Voyage inherits the last run's
+  // looted flags and the wrecks stay empty with their glints hidden.
+  ctx.events?.on('game:start', () => {
+    for (const spot of world.diveSpots) {
+      spot.looted = false;
+      if (spot.glint) spot.glint.visible = true;
+    }
+  });
 
   return {
     group,

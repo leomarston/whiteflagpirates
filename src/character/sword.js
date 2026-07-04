@@ -148,6 +148,25 @@ export class SwordCombat {
     if (this._trail) this._trail.visible = false;
   }
 
+  /** Clear all combat/trail state — called on respawn so a mid-swing death
+   *  doesn't leave the blade trail (and attack state) frozen in the world. */
+  reset() {
+    this.attackT = -1;
+    this.combo = 0;
+    this.heavy = false;
+    this.struck = false;
+    this.queued = false;
+    this.blockHeld = false;
+    this.parryT = -1;
+    this.dodgeT = -1;
+    this._riposteT = -1;
+    this._riposte = false;
+    this._lmbHold = 0;
+    this._lmbDown = false;
+    this._heavyFired = false;
+    this._killTrail();
+  }
+
   _updateTrail(dt, swinging) {
     if (swinging) {
       if (!this._swinging) { this._seedTrail(); this._trailFade = 1; this._trail.visible = true; }
@@ -316,19 +335,26 @@ export class SwordCombat {
 
     if (ch.isSwimming || this.blockHeld) return;
 
-    if (input.mouse.wasPressed(0) && !ctx.ui?.pointerOverUI) {
-      if (this.attackT < 0) this.startAttack(false);
-      else if (this.attackT / this.attackDur > 0.38) this.queued = true;
-    }
-    // heavy: hold LMB — detect long press
-    if (input.mouse.pressed(0)) {
+    // Tap = light, hold = heavy. Don't commit on press: hold past the threshold
+    // fires a single heavy; release before it fires a light (or buffers the next
+    // combo hit). A fresh press is required for each attack — no auto-repeat.
+    const HEAVY_HOLD = 0.34;
+    const overUI = ctx.ui?.pointerOverUI;
+    if (input.mouse.pressed(0) && !overUI) {
+      if (!this._lmbDown) { this._lmbDown = true; this._lmbHold = 0; this._heavyFired = false; }
       this._lmbHold += dt;
-      if (this._lmbHold > 0.42 && this.attackT < 0) {
+      if (this._lmbHold >= HEAVY_HOLD && !this._heavyFired && this.attackT < 0) {
+        this._heavyFired = true;
         this.startAttack(true);
-        this._lmbHold = 0;
       }
     } else {
+      if (this._lmbDown && !this._heavyFired && this._lmbHold < HEAVY_HOLD) {
+        if (this.attackT < 0) this.startAttack(false);
+        else if (this.attackT / this.attackDur > 0.38) this.queued = true;
+      }
+      this._lmbDown = false;
       this._lmbHold = 0;
+      this._heavyFired = false;
     }
 
     if (input.wasPressed('KeyF')) this.firePistol();

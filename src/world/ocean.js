@@ -251,6 +251,16 @@ export class Ocean {
 
     for (let i = 0; i < WAKE_CAP; i++) this._wakeAge[i] += dt;
 
+    // prune sources whose group has left the scene (sunk/despawned ships) so
+    // they don't leak in _wakeSources/_wakeLast forever
+    for (let i = sources.length - 1; i >= 0; i--) {
+      const s = sources[i];
+      if (!s || s.parent === null) {
+        this._wakeLast.delete(s);
+        sources.splice(i, 1);
+      }
+    }
+
     // drop stamps along each source's path since its last drop
     for (const obj of sources) {
       const pos = obj?.position;

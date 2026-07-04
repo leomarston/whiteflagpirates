@@ -62,14 +62,17 @@ export class MapScreen {
         this.zoom = Math.min(4, Math.max(0.8, this.zoom * (e.deltaY < 0 ? 1.15 : 0.87)));
         this._draw();
       }, { passive: false });
-      let dragging = false, lx = 0, ly = 0;
-      this.canvas.addEventListener('mousedown', (e) => { dragging = true; this._dragged = false; lx = e.clientX; ly = e.clientY; });
-      window.addEventListener('mouseup', () => { dragging = false; });
+      this.canvas.addEventListener('mousedown', (e) => { this._mapDragging = true; this._dragged = false; this._lx = e.clientX; this._ly = e.clientY; });
+      // register the window mouseup ONCE — open() runs on every map toggle
+      if (!this._mouseUpBound) {
+        this._mouseUpBound = true;
+        window.addEventListener('mouseup', () => { this._mapDragging = false; });
+      }
       this.canvas.addEventListener('mousemove', (e) => {
-        if (!dragging) return;
-        this.panX += (e.clientX - lx);
-        this.panY += (e.clientY - ly);
-        lx = e.clientX; ly = e.clientY;
+        if (!this._mapDragging) return;
+        this.panX += (e.clientX - this._lx);
+        this.panY += (e.clientY - this._ly);
+        this._lx = e.clientX; this._ly = e.clientY;
         this._dragged = true;
         this._draw();
       });

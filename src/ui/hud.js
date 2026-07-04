@@ -181,7 +181,10 @@ export class HUD {
     // gold + day
     const gold = ctx.state?.data?.gold ?? 0;
     this._set('gold', this.goldEl, `${gold.toLocaleString('en-US')} s`);
-    const day = Math.floor(ctx.time.t / ctx.time.dayLength) + 1;
+    // Derive the day from persisted play time, not the session-local clock, so
+    // "Day N" survives a Continue instead of resetting to Day 1 every load.
+    const elapsed = ctx.state?.data?.timePlayed ?? ctx.time.t;
+    const day = Math.floor(elapsed / (ctx.time.dayLength || 1)) + 1;
     const frac = ctx.time.dayFrac;
     const phase = frac < 0.2 ? 'small hours' : frac < 0.3 ? 'dawn' : frac < 0.45 ? 'morning'
       : frac < 0.58 ? 'midday' : frac < 0.72 ? 'afternoon' : frac < 0.82 ? 'dusk' : 'night';

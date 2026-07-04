@@ -176,21 +176,45 @@ events.on('ship:goashore', ({ island, shore }) => {
   persist();
 });
 
-events.on('player:death', () => {
-  setTimeout(() => events.emit('player:respawn'), 100);
+// Death & respawn — one path, driven by the death-screen button (menus.js
+// shows the overlay on 'player:death' and its button emits 'player:respawn').
+// No auto-respawn here, or the 10% gold penalty would be applied twice.
+let _respawning = false;
+
+// Losing the player's OWN ship in naval combat is a death too — otherwise the
+// helm/camera freeze forever once the wreck is removed (soft-lock).
+events.on('ship:sunk', ({ ship }) => {
+  if (ship && ship === ctx.playerShip?.ship && !_respawning) {
+    _respawning = true;
+    ctx.state.addLog('The ship went down under me. The sea always collects.');
+    events.emit('player:death', { cause: 'shipwreck' });
+  }
 });
 
 events.on('player:respawn', () => {
-  const near = ctx.world?.getNearestPort?.(ctx.camera.position);
+  const focus = ctx.playerShip?.ship?.group?.position ?? ctx.camera.position;
+  const near = ctx.world?.getNearestPort?.(focus);
   const dock = near?.port?.dockPosition;
   ctx.state.addGold(-Math.round(ctx.state.data.gold * 0.1));
-  if (ctx.character && dock) {
+
+  const shipDead = !ctx.playerShip?.ship?.alive || ctx.playerShip?.ship?.sinking;
+  if (shipDead) {
+    // wrecked: give her a fresh hull and put the captain back at the nearest port
+    if (ctx.state.data.ship) ctx.state.data.ship.hull = null;
+    ctx.playerShip?._rebuild?.(true);
+    if (dock && near) {
+      const away = Math.atan2(dock.x - near.island.center.x, dock.z - near.island.center.z);
+      ctx.playerShip?.placeAt?.(dock.x + Math.sin(away) * 150, dock.z + Math.cos(away) * 150, away);
+    }
+    ctx.setMode('sail');
+  } else if (ctx.character && dock) {
     ctx.character.hp = ctx.character.hpMax ?? 100;
     ctx.character.spawnAt(dock, 0);
     ctx.setMode('foot');
   } else {
     ctx.setMode('sail');
   }
+  _respawning = false;
 });
 
 // island discovery

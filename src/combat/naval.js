@@ -306,11 +306,40 @@ export class NavalCombat {
         reloadMax: this.reloadTimeFor(ship), ammo: this.playerAmmo,
       });
       if (input.mouse.wasPressed(0)) {
-        this.fireBroadside(ship, side, { type: this.playerAmmo });
+        this.fireBroadside(ship, side, {
+          type: this.playerAmmo,
+          targetPoint: this._playerTargetPoint(ship, side),
+        });
       }
     } else {
       ctx.events?.emit('aim:update', { side: null });
     }
+  }
+
+  /** Range the player's broadside: aim at the nearest enemy on the fired side
+   *  (led by flight time), else a sensible mid-range point abeam so the shot
+   *  actually arcs out instead of always plopping down at the default elevation. */
+  _playerTargetPoint(ship, side) {
+    const heading = ship.physics.heading;
+    const sideSign = side === 'L' ? -1 : 1;
+    const ax = Math.cos(heading) * sideSign, az = -Math.sin(heading) * sideSign;
+    const p = ship.group.position;
+    let best = null, bestD = COMBAT.MAX_RANGE;
+    for (const s of this.ctx.ships?.list ?? []) {
+      if (s === ship || !s.alive || s.sinking) continue;
+      const dx = s.position.x - p.x, dz = s.position.z - p.z;
+      if (dx * ax + dz * az < 30) continue;          // must be on the aimed side
+      const d = Math.hypot(dx, dz);
+      if (d < bestD) { bestD = d; best = s; }
+    }
+    if (best) {
+      const flight = bestD / COMBAT.BALL_SPEED;
+      _v.copy(best.position);
+      _v.x += Math.sin(best.physics.heading) * best.physics.speed * flight;
+      _v.z += Math.cos(best.physics.heading) * best.physics.speed * flight;
+      return _v.clone();
+    }
+    return new THREE.Vector3(p.x + ax * 260, 0, p.z + az * 260);
   }
 
   _updateBoardingOffers() {
